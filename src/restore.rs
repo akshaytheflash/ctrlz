@@ -156,98 +156,127 @@ pub fn apply_plan(
     };
 
     for relative in &plan.deletes {
-        let path = join_rel(root, relative)?;
-        let meta = match fs::symlink_metadata(&path) {
-            Ok(meta) => meta,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(RestoreError::fs("inspect", &path, error)),
-        };
-        if is_reparse(&path) {
-            report
-                .skipped
-                .push(format!("{relative}: symlink or reparse point"));
-            continue;
-        }
-        if meta.is_dir() {
-            report
-                .skipped
-                .push(format!("{relative}: a directory replaced this file"));
-            continue;
-        }
-        if !parents_are_real(root, relative)? {
-            report
-                .skipped
-                .push(format!("{relative}: parent is a symlink"));
-            continue;
-        }
-        make_writable(&path).map_err(|error| RestoreError::fs("make writable", &path, error))?;
-        match fs::remove_file(long_path(&path)) {
-            Ok(()) => report.deleted += 1,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(RestoreError::fs("delete", &path, error)),
-        }
+        delete_file(root, relative, &mut report)?;
     }
-
     for write in &plan.writes {
-        let path = join_rel(root, &write.path)?;
-        if !prepare_parents(root, &write.path)? {
-            report.skipped.push(format!(
-                "{}: parent is a symlink or not a directory",
-                write.path
-            ));
-            continue;
-        }
-        let meta = fs::symlink_metadata(&path).ok();
-        let exists = meta.is_some();
-        if exists && is_reparse(&path) {
-            report
-                .skipped
-                .push(format!("{}: symlink or reparse point", write.path));
-            continue;
-        }
-        if meta.as_ref().is_some_and(|meta| meta.is_dir()) {
-            report
-                .skipped
-                .push(format!("{}: a directory replaced this file", write.path));
-            continue;
-        }
-
-        if write.content || !exists {
-            let bytes = read_blob(blob_dir, &write.hash)?;
-            let temp = temp_path(&path);
-            if let Err(error) = fs::write(long_path(&temp), &bytes) {
-                return Err(RestoreError::fs("write", &temp, error));
-            }
-            if let Err(error) = set_mtime(&temp, write.mtime_ns) {
-                remove_temp(&temp);
-                return Err(RestoreError::fs("set mtime on", &temp, error));
-            }
-            if let Err(error) = set_mode(&temp, write.mode) {
-                remove_temp(&temp);
-                return Err(RestoreError::fs("set mode on", &temp, error));
-            }
-            if exists {
-                make_writable(&path)
-                    .map_err(|error| RestoreError::fs("make writable", &path, error))?;
-                if let Err(error) = fs::remove_file(long_path(&path)) {
-                    return Err(RestoreError::fs("replace", &path, error));
-                }
-            }
-            if let Err(error) = fs::rename(long_path(&temp), long_path(&path)) {
-                return Err(RestoreError::fs("rename", &path, error));
-            }
-            report.written += 1;
-        } else {
-            make_writable(&path)
-                .map_err(|error| RestoreError::fs("make writable", &path, error))?;
-            set_mtime(&path, write.mtime_ns)
-                .map_err(|error| RestoreError::fs("set mtime on", &path, error))?;
-            set_mode(&path, write.mode)
-                .map_err(|error| RestoreError::fs("set mode on", &path, error))?;
-        }
+        write_file(root, blob_dir, write, &mut report)?;
     }
 
     Ok(report)
+}
+
+fn delete_file(
+    root: &Path,
+    relative: &str,
+    report: &mut RestoreReport,
+) -> Result<(), RestoreError> {
+    let path = join_rel(root, relative)?;
+    let meta = match fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(RestoreError::fs("inspect", &path, error)),
+    };
+    if is_reparse(&path) {
+        report
+            .skipped
+            .push(format!("{relative}: symlink or reparse point"));
+        return Ok(());
+    }
+    if meta.is_dir() {
+        report
+            .skipped
+            .push(format!("{relative}: a directory replaced this file"));
+        return Ok(());
+    }
+    if !parents_are_real(root, relative)? {
+        report
+            .skipped
+            .push(format!("{relative}: parent is a symlink"));
+        return Ok(());
+    }
+    make_writable(&path).map_err(|error| RestoreError::fs("make writable", &path, error))?;
+    match fs::remove_file(long_path(&path)) {
+        Ok(()) => report.deleted += 1,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(RestoreError::fs("delete", &path, error)),
+    }
+    Ok(())
+}
+
+fn write_file(
+    root: &Path,
+    blob_dir: &Path,
+    write: &Write,
+    report: &mut RestoreReport,
+) -> Result<(), RestoreError> {
+    let path = join_rel(root, &write.path)?;
+    if !prepare_parents(root, &write.path)? {
+        report.skipped.push(format!(
+            "{}: parent is a symlink or not a directory",
+            write.path
+        ));
+        return Ok(());
+    }
+    let meta = fs::symlink_metadata(&path).ok();
+    let exists = meta.is_some();
+    if exists && is_reparse(&path) {
+        report
+            .skipped
+            .push(format!("{}: symlink or reparse point", write.path));
+        return Ok(());
+    }
+    if meta.as_ref().is_some_and(|meta| meta.is_dir()) {
+        report
+            .skipped
+            .push(format!("{}: a directory replaced this file", write.path));
+        return Ok(());
+    }
+
+    if write.content || !exists {
+        write_content(&path, write, blob_dir, exists)?;
+        report.written += 1;
+    } else {
+        set_metadata(&path, write)?;
+    }
+    Ok(())
+}
+
+fn write_content(
+    path: &Path,
+    write: &Write,
+    blob_dir: &Path,
+    exists: bool,
+) -> Result<(), RestoreError> {
+    let bytes = read_blob(blob_dir, &write.hash)?;
+    let temp = temp_path(path);
+    if let Err(error) = fs::write(long_path(&temp), &bytes) {
+        return Err(RestoreError::fs("write", &temp, error));
+    }
+    if let Err(error) = set_mtime(&temp, write.mtime_ns) {
+        remove_temp(&temp);
+        return Err(RestoreError::fs("set mtime on", &temp, error));
+    }
+    if let Err(error) = set_mode(&temp, write.mode) {
+        remove_temp(&temp);
+        return Err(RestoreError::fs("set mode on", &temp, error));
+    }
+    if exists {
+        make_writable(path).map_err(|error| RestoreError::fs("make writable", path, error))?;
+        if let Err(error) = fs::remove_file(long_path(path)) {
+            return Err(RestoreError::fs("replace", path, error));
+        }
+    }
+    if let Err(error) = fs::rename(long_path(&temp), long_path(path)) {
+        return Err(RestoreError::fs("rename", path, error));
+    }
+    Ok(())
+}
+
+fn set_metadata(path: &Path, write: &Write) -> Result<(), RestoreError> {
+    make_writable(path).map_err(|error| RestoreError::fs("make writable", path, error))?;
+    set_mtime(path, write.mtime_ns)
+        .map_err(|error| RestoreError::fs("set mtime on", path, error))?;
+    set_mode(path, write.mode).map_err(|error| RestoreError::fs("set mode on", path, error))
 }
 
 fn remove_temp(path: &Path) {

@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Cursor, Write};
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -498,96 +498,25 @@ impl Store {
         session: &str,
         label: &str,
     ) -> Result<Turn, StoreError> {
-        let mut added = 0i64;
-        let mut modified = 0i64;
-        for (path, entry) in &manifest.entries {
-            match previous.get(path) {
-                None => added += 1,
-                Some(old) if old.hash != entry.hash || old.mode != entry.mode => modified += 1,
-                Some(_) => {}
-            }
-        }
-        let deleted = previous
-            .keys()
-            .filter(|path| !manifest.entries.contains_key(*path))
-            .count() as i64;
-
+        let (added, modified, deleted) = change_counts(manifest, previous);
         let started_at = now_ms();
         let bytes = manifest.new_bytes.min(i64::MAX as u64) as i64;
+        let record = TurnRecord {
+            agent,
+            session,
+            started_at,
+            label,
+            added,
+            modified,
+            deleted,
+            bytes,
+        };
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO turns (agent, session, started_at, label, file_count, added, modified, \
-             deleted, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                agent,
-                session,
-                started_at,
-                label,
-                manifest.entries.len() as i64,
-                added,
-                modified,
-                deleted,
-                bytes
-            ],
-        )?;
-        let turn_id = tx.last_insert_rowid();
-
-        if let Some(previous_id) = previous_id {
-            tx.execute(
-                "INSERT INTO files (turn_id, path, state, hash, size, mode, mtime_ns) \
-                 SELECT ?1, path, state, hash, size, mode, mtime_ns FROM files WHERE turn_id = ?2",
-                params![turn_id, previous_id],
-            )?;
-        }
-
-        for (path, entry) in &manifest.entries {
-            let unchanged = previous.get(path).is_some_and(|old| {
-                old.hash == entry.hash && old.size == entry.size && old.mtime_ns == entry.mtime_ns
-            });
-            if unchanged {
-                continue;
-            }
-            tx.execute(
-                "INSERT OR REPLACE INTO files \
-                 (turn_id, path, state, hash, size, mode, mtime_ns) \
-                 VALUES (?1, ?2, 'present', ?3, ?4, ?5, ?6)",
-                params![
-                    turn_id,
-                    path,
-                    entry.hash,
-                    entry.size as i64,
-                    entry.mode as i64,
-                    entry.mtime_ns
-                ],
-            )?;
-        }
-
-        for (path, old) in previous {
-            if manifest.entries.contains_key(path) {
-                continue;
-            }
-            tx.execute(
-                "INSERT OR REPLACE INTO files \
-                 (turn_id, path, state, hash, size, mode, mtime_ns) \
-                 VALUES (?1, ?2, 'deleted', ?3, 0, 0, 0)",
-                params![turn_id, path, old.hash],
-            )?;
-        }
-
-        for skipped in &manifest.skipped {
-            tx.execute(
-                "INSERT OR REPLACE INTO skipped (turn_id, path, size, reason) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    turn_id,
-                    skipped.path,
-                    skipped.size.min(i64::MAX as u64) as i64,
-                    skipped.reason
-                ],
-            )?;
-        }
-
+        let turn_id = insert_turn(&tx, manifest, &record)?;
+        copy_files(&tx, turn_id, previous_id, manifest, previous)?;
+        insert_skipped(&tx, turn_id, &manifest.skipped)?;
         tx.commit()?;
+
         Ok(Turn {
             id: turn_id,
             agent: agent.to_string(),
@@ -618,6 +547,128 @@ impl Store {
         }
         Ok(summary)
     }
+}
+
+fn change_counts(manifest: &Manifest, previous: &HashMap<String, Cached>) -> (i64, i64, i64) {
+    let mut added = 0;
+    let mut modified = 0;
+    for (path, entry) in &manifest.entries {
+        match previous.get(path) {
+            None => added += 1,
+            Some(old) if old.hash != entry.hash || old.mode != entry.mode => modified += 1,
+            Some(_) => {}
+        }
+    }
+    let deleted = previous
+        .keys()
+        .filter(|path| !manifest.entries.contains_key(*path))
+        .count() as i64;
+    (added, modified, deleted)
+}
+
+struct TurnRecord<'a> {
+    agent: &'a str,
+    session: &'a str,
+    started_at: i64,
+    label: &'a str,
+    added: i64,
+    modified: i64,
+    deleted: i64,
+    bytes: i64,
+}
+
+fn insert_turn(
+    tx: &Transaction<'_>,
+    manifest: &Manifest,
+    record: &TurnRecord<'_>,
+) -> Result<i64, rusqlite::Error> {
+    tx.execute(
+        "INSERT INTO turns (agent, session, started_at, label, file_count, added, modified, \
+         deleted, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            record.agent,
+            record.session,
+            record.started_at,
+            record.label,
+            manifest.entries.len() as i64,
+            record.added,
+            record.modified,
+            record.deleted,
+            record.bytes
+        ],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
+fn copy_files(
+    tx: &Transaction<'_>,
+    turn_id: i64,
+    previous_id: Option<i64>,
+    manifest: &Manifest,
+    previous: &HashMap<String, Cached>,
+) -> Result<(), rusqlite::Error> {
+    if let Some(previous_id) = previous_id {
+        tx.execute(
+            "INSERT INTO files (turn_id, path, state, hash, size, mode, mtime_ns) \
+             SELECT ?1, path, state, hash, size, mode, mtime_ns FROM files WHERE turn_id = ?2",
+            params![turn_id, previous_id],
+        )?;
+    }
+
+    for (path, entry) in &manifest.entries {
+        let unchanged = previous.get(path).is_some_and(|old| {
+            old.hash == entry.hash && old.size == entry.size && old.mtime_ns == entry.mtime_ns
+        });
+        if unchanged {
+            continue;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO files \
+             (turn_id, path, state, hash, size, mode, mtime_ns) \
+             VALUES (?1, ?2, 'present', ?3, ?4, ?5, ?6)",
+            params![
+                turn_id,
+                path,
+                entry.hash,
+                entry.size as i64,
+                entry.mode as i64,
+                entry.mtime_ns
+            ],
+        )?;
+    }
+
+    for (path, old) in previous {
+        if manifest.entries.contains_key(path) {
+            continue;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO files \
+             (turn_id, path, state, hash, size, mode, mtime_ns) \
+             VALUES (?1, ?2, 'deleted', ?3, 0, 0, 0)",
+            params![turn_id, path, old.hash],
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_skipped(
+    tx: &Transaction<'_>,
+    turn_id: i64,
+    skipped: &[Skipped],
+) -> Result<(), rusqlite::Error> {
+    for skipped in skipped {
+        tx.execute(
+            "INSERT OR REPLACE INTO skipped (turn_id, path, size, reason) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                turn_id,
+                skipped.path,
+                skipped.size.min(i64::MAX as u64) as i64,
+                skipped.reason
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {

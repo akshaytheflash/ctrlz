@@ -46,14 +46,7 @@ pub fn prune(store: &Store, keep: usize, max_size: Option<u64>) -> Result<PruneR
     }
 
     if let Some(limit) = max_size {
-        loop {
-            let referenced = referenced_blobs(store, &kept)?;
-            let projected = db_size(&store.project_dir)? + blob_bytes(store, &referenced)?;
-            if projected <= limit || kept.len() == 1 {
-                break;
-            }
-            kept.pop();
-        }
+        shrink_to_size(store, &mut kept, limit)?;
     }
 
     let kept_set: HashSet<i64> = kept.iter().copied().collect();
@@ -62,12 +55,7 @@ pub fn prune(store: &Store, keep: usize, max_size: Option<u64>) -> Result<PruneR
         .map(|turn| turn.id)
         .filter(|id| !kept_set.contains(id))
         .collect();
-
-    let tx = store.connection().unchecked_transaction()?;
-    for id in &drop {
-        tx.execute("DELETE FROM turns WHERE id = ?1", params![id])?;
-    }
-    tx.commit()?;
+    delete_turns(store, &drop)?;
 
     let referenced = referenced_blobs(store, &kept)?;
     let (blobs_removed, bytes_freed) = remove_unreferenced(store, &referenced)?;
@@ -82,6 +70,26 @@ pub fn prune(store: &Store, keep: usize, max_size: Option<u64>) -> Result<PruneR
         kept: kept.len(),
         store_size: dir_size(&store.project_dir)?,
     })
+}
+
+fn shrink_to_size(store: &Store, kept: &mut Vec<i64>, limit: u64) -> Result<(), PruneError> {
+    loop {
+        let referenced = referenced_blobs(store, kept)?;
+        let projected = db_size(&store.project_dir)? + blob_bytes(store, &referenced)?;
+        if projected <= limit || kept.len() == 1 {
+            return Ok(());
+        }
+        kept.pop();
+    }
+}
+
+fn delete_turns(store: &Store, drop: &[i64]) -> Result<(), PruneError> {
+    let tx = store.connection().unchecked_transaction()?;
+    for id in drop {
+        tx.execute("DELETE FROM turns WHERE id = ?1", params![id])?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 fn referenced_blobs(store: &Store, turn_ids: &[i64]) -> Result<HashSet<String>, PruneError> {
