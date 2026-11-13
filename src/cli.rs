@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use crate::diff::{detect_renames, diff_manifests, unified, Kind};
 use crate::manifest::manifest_of;
+use crate::prune::{prune as prune_turns, summary as prune_summary};
 use crate::restore::{apply_plan, plan_restore};
 use crate::snapshot::{mark_at, MarkOptions, DEFAULT_MAX_FILE};
 use crate::store::{read_blob, Store};
@@ -59,6 +60,38 @@ enum Command {
     Undo { n: Option<i64> },
     /// Restore a specific turn
     Back { n: i64 },
+    /// Receive a coding-agent hook payload on stdin
+    Hook {
+        #[command(subcommand)]
+        kind: HookKind,
+    },
+    /// Delete old turns and unreferenced blobs
+    Prune {
+        #[arg(long, default_value_t = 50)]
+        keep: usize,
+        #[arg(long)]
+        max_size: Option<String>,
+    },
+    /// Snapshot after bursts of file changes
+    Watch {
+        #[arg(long, default_value = "3s", value_parser = parse_duration)]
+        idle: Duration,
+        #[arg(long, default_value = "8M", value_parser = parse_size)]
+        max_file: u64,
+    },
+    /// Check the store, the hooks, write permissions, and clock skew
+    Doctor,
+}
+
+#[derive(Subcommand)]
+enum HookKind {
+    /// Claude Code hook payload
+    Claude {
+        #[arg(long)]
+        event: Option<String>,
+    },
+    /// opencode hook payload
+    Opencode,
 }
 
 pub fn run() -> Result<()> {
@@ -77,6 +110,22 @@ pub fn run() -> Result<()> {
         Command::Diff { n } => diff(n),
         Command::Undo { n } => undo(n),
         Command::Back { n } => undo(Some(n)),
+        Command::Hook { kind } => {
+            match kind {
+                HookKind::Claude { event } => crate::hooks::run_claude(event.as_deref()),
+                HookKind::Opencode => crate::hooks::run_opencode(),
+            };
+            Ok(())
+        }
+        Command::Prune { keep, max_size } => {
+            let max_size = match max_size {
+                Some(text) => Some(parse_size(&text).map_err(|error| anyhow!(error))?),
+                None => None,
+            };
+            prune(keep, max_size)
+        }
+        Command::Watch { idle, max_file } => crate::watch::watch(idle, max_file),
+        Command::Doctor => doctor(),
     }
 }
 
@@ -126,7 +175,8 @@ export default Plugin.define({
   async setup(ctx) {
     await ctx.tool.hook("execute.before", (event) => {
       const child = spawn("ctrlz", ["mark", "--agent", "opencode",
-        "--session", event.sessionID, "--if-stale", "2s"], {
+        "--session", event.sessionID, "--label", "prompt",
+        "--if-stale", "2s"], {
         stdio: "ignore", detached: true, windowsHide: true,
       })
       child.unref()
@@ -157,8 +207,8 @@ fn install_claude(root: &Path) -> Result<()> {
         .as_object_mut()
         .context("hooks in .claude/settings.json must be a JSON object")?;
 
-    add_hook(hooks, "UserPromptSubmit", "ctrlz hook claude");
-    add_hook(hooks, "Stop", "ctrlz hook claude --event stop");
+    add_hook(hooks, "UserPromptSubmit", "ctrlz hook claude")?;
+    add_hook(hooks, "Stop", "ctrlz hook claude --event stop")?;
 
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let mut text = serde_json::to_string_pretty(&settings)?;
@@ -168,13 +218,15 @@ fn install_claude(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn add_hook(hooks: &mut serde_json::Map<String, Value>, event: &str, command: &str) {
+fn add_hook(hooks: &mut serde_json::Map<String, Value>, event: &str, command: &str) -> Result<()> {
     let entries = hooks
         .entry(event)
         .or_insert_with(|| json!([]))
         .as_array_mut();
     let Some(entries) = entries else {
-        return;
+        return Err(anyhow!(
+            "hooks.{event} in .claude/settings.json must be an array"
+        ));
     };
     let exists = entries.iter().any(|entry| {
         entry
@@ -192,6 +244,7 @@ fn add_hook(hooks: &mut serde_json::Map<String, Value>, event: &str, command: &s
             "hooks": [ { "type": "command", "command": command } ]
         }));
     }
+    Ok(())
 }
 
 fn mark(
@@ -241,8 +294,8 @@ fn list(limit: usize) -> Result<()> {
     }
 
     println!(
-        "{:>4}  {:<10}  {:<10}  {:<6} {:<6} {:<6}  {:>9}  {}",
-        "turn", "time", "agent", "+add", "~mod", "-del", "on disk", "label"
+        "{:>4}  {:<10}  {:<10}  {:<6} {:<6} {:<6}  {:>9}  label",
+        "turn", "time", "agent", "+add", "~mod", "-del", "on disk"
     );
     for turn in turns {
         println!(
@@ -281,9 +334,14 @@ fn show(n: i64) -> Result<()> {
     if !turn.session.is_empty() {
         println!("session {}", turn.session);
     }
+    let label = if turn.label.is_empty() {
+        "-"
+    } else {
+        turn.label.as_str()
+    };
     println!(
         "label {}  files {}  +{} ~{} -{}  {} on disk",
-        empty_as(&turn.label, "-"),
+        label,
         turn.file_count,
         turn.added,
         turn.modified,
@@ -398,10 +456,20 @@ fn undo(n: Option<i64>) -> Result<()> {
     Ok(())
 }
 
-fn empty_as<'a>(value: &'a str, fallback: &'a str) -> &'a str {
-    if value.is_empty() {
-        fallback
-    } else {
-        value
+fn prune(keep: usize, max_size: Option<u64>) -> Result<()> {
+    let cwd = std::env::current_dir().context("cannot read the current directory")?;
+    let store = Store::open(&cwd)?;
+    let report = prune_turns(&store, keep, max_size)?;
+    println!("{}", prune_summary(&report));
+    Ok(())
+}
+
+fn doctor() -> Result<()> {
+    let cwd = std::env::current_dir().context("cannot read the current directory")?;
+    let report = crate::doctor::run(&cwd);
+    report.print();
+    if report.failed() {
+        return Err(anyhow!("doctor found {} problem(s)", report.failures()));
     }
+    Ok(())
 }

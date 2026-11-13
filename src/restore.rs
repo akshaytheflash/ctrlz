@@ -8,7 +8,8 @@ use thiserror::Error;
 use crate::manifest::Manifest;
 use crate::store::{read_blob, BlobError};
 use crate::util::{
-    is_reparse, join_rel, long_path, set_mode, set_mtime, validate_rel_path, PathError,
+    is_reparse, join_rel, long_path, make_writable, set_mode, set_mtime, validate_rel_path,
+    PathError,
 };
 
 #[derive(Debug, Error)]
@@ -65,6 +66,7 @@ pub fn plan_restore(
         .entries
         .keys()
         .filter(|path| !target.entries.contains_key(*path))
+        .filter(|path| !was_skipped(target, path))
         .cloned()
         .collect();
     deletes.sort();
@@ -155,9 +157,6 @@ pub fn apply_plan(
 
     for relative in &plan.deletes {
         let path = join_rel(root, relative)?;
-        if !path.exists() {
-            continue;
-        }
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -181,6 +180,7 @@ pub fn apply_plan(
                 .push(format!("{relative}: parent is a symlink"));
             continue;
         }
+        make_writable(&path).map_err(|error| RestoreError::fs("make writable", &path, error))?;
         match fs::remove_file(long_path(&path)) {
             Ok(()) => report.deleted += 1,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -197,28 +197,38 @@ pub fn apply_plan(
             ));
             continue;
         }
-        if path.exists() && is_reparse(&path) {
+        let meta = fs::symlink_metadata(&path).ok();
+        let exists = meta.is_some();
+        if exists && is_reparse(&path) {
             report
                 .skipped
                 .push(format!("{}: symlink or reparse point", write.path));
             continue;
         }
+        if meta.as_ref().is_some_and(|meta| meta.is_dir()) {
+            report
+                .skipped
+                .push(format!("{}: a directory replaced this file", write.path));
+            continue;
+        }
 
-        if write.content {
+        if write.content || !exists {
             let bytes = read_blob(blob_dir, &write.hash)?;
             let temp = temp_path(&path);
             if let Err(error) = fs::write(long_path(&temp), &bytes) {
                 return Err(RestoreError::fs("write", &temp, error));
             }
             if let Err(error) = set_mtime(&temp, write.mtime_ns) {
-                let _ = fs::remove_file(long_path(&temp));
+                remove_temp(&temp);
                 return Err(RestoreError::fs("set mtime on", &temp, error));
             }
             if let Err(error) = set_mode(&temp, write.mode) {
-                let _ = fs::remove_file(long_path(&temp));
+                remove_temp(&temp);
                 return Err(RestoreError::fs("set mode on", &temp, error));
             }
-            if path.exists() {
+            if exists {
+                make_writable(&path)
+                    .map_err(|error| RestoreError::fs("make writable", &path, error))?;
                 if let Err(error) = fs::remove_file(long_path(&path)) {
                     return Err(RestoreError::fs("replace", &path, error));
                 }
@@ -228,6 +238,8 @@ pub fn apply_plan(
             }
             report.written += 1;
         } else {
+            make_writable(&path)
+                .map_err(|error| RestoreError::fs("make writable", &path, error))?;
             set_mtime(&path, write.mtime_ns)
                 .map_err(|error| RestoreError::fs("set mtime on", &path, error))?;
             set_mode(&path, write.mode)
@@ -236,6 +248,25 @@ pub fn apply_plan(
     }
 
     Ok(report)
+}
+
+fn remove_temp(path: &Path) {
+    // Cleanup after a failed write must not hide the error that caused it.
+    if let Err(error) = fs::remove_file(long_path(path)) {
+        if error.kind() != io::ErrorKind::NotFound {
+            eprintln!(
+                "ctrlz: could not remove temporary file {}: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
+fn was_skipped(target: &Manifest, path: &str) -> bool {
+    target.skipped.iter().any(|skipped| {
+        path == skipped.path
+            || path.starts_with(&format!("{}/", skipped.path.trim_end_matches('/')))
+    })
 }
 
 fn temp_path(path: &Path) -> PathBuf {
@@ -287,4 +318,84 @@ fn prepare_parents(root: &Path, relative: &str) -> Result<bool, RestoreError> {
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::Skipped;
+
+    fn entry(path: &str, hash: &str) -> crate::manifest::Entry {
+        crate::manifest::Entry {
+            path: path.into(),
+            hash: hash.into(),
+            size: 4,
+            mode: 0o644,
+            mtime_ns: 0,
+        }
+    }
+
+    fn manifest(entries: Vec<crate::manifest::Entry>) -> Manifest {
+        let mut manifest = Manifest::empty();
+        for entry in entries {
+            manifest.entries.insert(entry.path.clone(), entry);
+        }
+        manifest
+    }
+
+    #[test]
+    fn orders_deletes_and_writes() {
+        let current = manifest(vec![entry("a.txt", "old-a"), entry("b.txt", "b")]);
+        let target = manifest(vec![entry("c.txt", "c"), entry("a.txt", "new-a")]);
+
+        let plan = plan_restore(&current, &target, false).unwrap();
+        assert_eq!(plan.deletes, vec!["b.txt"]);
+        let writes: Vec<&str> = plan.writes.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(writes, vec!["a.txt", "c.txt"]);
+        assert!(plan.writes.iter().all(|write| write.content));
+    }
+
+    #[test]
+    fn counts_unchanged_files_as_a_no_op() {
+        let manifest = manifest(vec![entry("a.txt", "a")]);
+        let plan = plan_restore(&manifest, &manifest, false).unwrap();
+        assert!(plan.deletes.is_empty());
+        assert!(plan.writes.is_empty());
+        assert_eq!(plan.unchanged, 1);
+    }
+
+    #[test]
+    fn aborts_on_a_case_collision() {
+        let target = manifest(vec![entry("src/App.tsx", "a"), entry("src/app.tsx", "b")]);
+        let error = plan_restore(&Manifest::empty(), &target, true).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("src/App.tsx"));
+        assert!(message.contains("src/app.tsx"));
+        assert!(plan_restore(&Manifest::empty(), &target, false).is_ok());
+    }
+
+    #[test]
+    fn rejects_paths_that_escape_the_root() {
+        for path in ["../evil.txt", "/etc/passwd", "a/../../evil.txt"] {
+            let target = manifest(vec![entry(path, "x")]);
+            assert!(matches!(
+                plan_restore(&Manifest::empty(), &target, false),
+                Err(PlanError::Path(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn never_deletes_a_file_the_target_skipped() {
+        let current = manifest(vec![entry("big.bin", "big")]);
+        let mut target = Manifest::empty();
+        target.skipped.push(Skipped {
+            path: "big.bin".into(),
+            size: 9,
+            reason: "larger than --max-file 4 B".into(),
+        });
+
+        let plan = plan_restore(&current, &target, false).unwrap();
+        assert!(plan.deletes.is_empty());
+    }
 }

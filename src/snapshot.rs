@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::manifest::{manifest_of, ManifestError};
+use crate::manifest::{manifest_of, Cached, Manifest, ManifestError};
 use crate::store::{Store, StoreError, Turn};
 use crate::util::now_ms;
 
@@ -50,6 +50,43 @@ pub fn mark_at(root: &Path, options: &MarkOptions<'_>) -> Result<Option<Turn>, M
 
     let cache = store.cached_entries(last.as_ref().map(|turn| turn.id))?;
     let manifest = manifest_of(&store.root, &store.blob_dir(), options.max_file, &cache)?;
-    let turn = store.record_turn(&manifest, options.agent, options.session, options.label)?;
+
+    // A no-op prompt or manual mark should not copy a 50k-row manifest. Reuse
+    // the latest turn, but never relabel a pre-restore snapshot: undo-an-undo
+    // depends on it. Stop always records a real turn end.
+    if let Some(last) = last.as_ref() {
+        if last.label != "pre-restore"
+            && options.label != "stop"
+            && manifest.skipped.is_empty()
+            && same_as_previous(&manifest, &cache)
+        {
+            let turn = store.touch_turn(last.id, options.agent, options.session, options.label)?;
+            return Ok(Some(turn));
+        }
+    }
+
+    let turn = store.record_turn_using(
+        &manifest,
+        last.as_ref().map(|turn| turn.id),
+        &cache,
+        options.agent,
+        options.session,
+        options.label,
+    )?;
     Ok(Some(turn))
+}
+
+fn same_as_previous(
+    manifest: &Manifest,
+    previous: &std::collections::HashMap<String, Cached>,
+) -> bool {
+    manifest.entries.len() == previous.len()
+        && manifest.entries.values().all(|entry| {
+            previous.get(&entry.path).is_some_and(|old| {
+                old.hash == entry.hash
+                    && old.size == entry.size
+                    && old.mode == entry.mode
+                    && old.mtime_ns == entry.mtime_ns
+            })
+        })
 }

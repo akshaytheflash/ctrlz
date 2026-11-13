@@ -60,34 +60,36 @@ pub fn diff_manifests(old: &Manifest, new: &Manifest) -> Vec<Change> {
 
 pub fn detect_renames(changes: Vec<Change>) -> Vec<Change> {
     let mut deleted: BTreeMap<String, Vec<Change>> = BTreeMap::new();
-    let mut renamed = Vec::new();
-
+    let mut rest = Vec::new();
     for change in changes {
-        match change.kind {
-            Kind::Deleted => {
-                if let Some(entry) = change.old.as_ref() {
-                    deleted.entry(entry.hash.clone()).or_default().push(change);
-                }
+        if change.kind == Kind::Deleted {
+            if let Some(entry) = change.old.as_ref() {
+                deleted.entry(entry.hash.clone()).or_default().push(change);
             }
-            Kind::Added => {
-                let hash = change.new.as_ref().map(|entry| entry.hash.clone());
-                let pair = hash
-                    .as_ref()
-                    .and_then(|hash| deleted.get_mut(hash))
-                    .and_then(|entries| entries.pop());
-                if let Some(old) = pair {
-                    renamed.push(Change {
-                        path: change.path,
-                        kind: Kind::Renamed { from: old.path },
-                        old: old.old,
-                        new: change.new,
-                    });
-                } else {
-                    renamed.push(change);
-                }
-            }
-            _ => renamed.push(change),
+        } else {
+            rest.push(change);
         }
+    }
+
+    let mut renamed = Vec::new();
+    for change in rest {
+        if change.kind == Kind::Added {
+            let hash = change.new.as_ref().map(|entry| entry.hash.clone());
+            let pair = hash
+                .as_ref()
+                .and_then(|hash| deleted.get_mut(hash))
+                .and_then(|entries| entries.pop());
+            if let Some(old) = pair {
+                renamed.push(Change {
+                    path: change.path,
+                    kind: Kind::Renamed { from: old.path },
+                    old: old.old,
+                    new: change.new,
+                });
+                continue;
+            }
+        }
+        renamed.push(change);
     }
 
     for mut entries in deleted.into_values() {
@@ -113,7 +115,11 @@ pub fn unified(old: Option<&[u8]>, new: Option<&[u8]>, path: &str) -> String {
         .header(&format!("a/{path}"), &format!("b/{path}"))
         .to_string();
     if formatted.is_empty() {
-        format!("mode {path}\n")
+        match (old, new) {
+            (None, _) => format!("new empty file {path}\n"),
+            (_, None) => format!("deleted empty file {path}\n"),
+            _ => format!("mode {path}\n"),
+        }
     } else {
         formatted
     }
@@ -121,4 +127,83 @@ pub fn unified(old: Option<&[u8]>, new: Option<&[u8]>, path: &str) -> String {
 
 fn is_text(bytes: &[u8]) -> bool {
     !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(path: &str, hash: &str) -> Entry {
+        Entry {
+            path: path.into(),
+            hash: hash.into(),
+            size: hash.len() as u64,
+            mode: 0o644,
+            mtime_ns: 1,
+        }
+    }
+
+    fn manifest(entries: Vec<Entry>) -> Manifest {
+        let mut manifest = Manifest::empty();
+        for entry in entries {
+            manifest.entries.insert(entry.path.clone(), entry);
+        }
+        manifest
+    }
+
+    #[test]
+    fn reports_add_modify_delete() {
+        let old = manifest(vec![
+            entry("a.txt", "one"),
+            entry("b.txt", "two"),
+            entry("c.txt", "three"),
+        ]);
+        let new = manifest(vec![
+            entry("a.txt", "one"),
+            entry("b.txt", "changed"),
+            entry("d.txt", "four"),
+        ]);
+
+        let changes = diff_manifests(&old, &new);
+        let kinds: Vec<(&str, &Kind)> = changes
+            .iter()
+            .map(|change| (change.path.as_str(), &change.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("b.txt", &Kind::Modified),
+                ("c.txt", &Kind::Deleted),
+                ("d.txt", &Kind::Added),
+            ]
+        );
+    }
+
+    #[test]
+    fn pairs_a_delete_and_add_with_the_same_hash_as_a_rename() {
+        let old = manifest(vec![entry("before.txt", "same")]);
+        let new = manifest(vec![entry("after.txt", "same")]);
+
+        let changes = detect_renames(diff_manifests(&old, &new));
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "after.txt");
+        assert_eq!(
+            changes[0].kind,
+            Kind::Renamed {
+                from: "before.txt".into()
+            }
+        );
+    }
+
+    #[test]
+    fn mode_changes_are_modifications() {
+        let old = manifest(vec![entry("run.sh", "same")]);
+        let mut changed = entry("run.sh", "same");
+        changed.mode = 0o755;
+        let new = manifest(vec![changed]);
+
+        let changes = diff_manifests(&old, &new);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, Kind::Modified);
+    }
 }

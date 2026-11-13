@@ -165,6 +165,30 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     fs::set_permissions(long_path(path), permissions)
 }
 
+#[cfg(unix)]
+pub fn make_writable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = fs::metadata(long_path(path))?;
+    let mode = meta.permissions().mode();
+    if mode & 0o200 == 0 {
+        fs::set_permissions(long_path(path), fs::Permissions::from_mode(mode | 0o200))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+pub fn make_writable(path: &Path) -> io::Result<()> {
+    let meta = fs::metadata(long_path(path))?;
+    let mut permissions = meta.permissions();
+    if permissions.readonly() {
+        // Windows has no PermissionsExt; clearing the readonly flag is the API.
+        permissions.set_readonly(false);
+        fs::set_permissions(long_path(path), permissions)?;
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn is_reparse(path: &Path) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -183,9 +207,11 @@ pub fn is_reparse(path: &Path) -> bool {
 
 #[cfg(windows)]
 pub fn long_path(path: &Path) -> PathBuf {
-    let text = path.as_os_str().to_string_lossy();
+    // Verbatim paths are not normalized by Windows, so a forward slash is a
+    // literal character there. Store paths use '/', filesystem paths do not.
+    let text = path.as_os_str().to_string_lossy().replace('/', r"\");
     if text.starts_with(r"\\?\") {
-        return path.to_path_buf();
+        return PathBuf::from(text);
     }
     if let Some(rest) = text.strip_prefix(r"\\") {
         return PathBuf::from(format!(r"\\?\UNC\{rest}"));
@@ -234,6 +260,15 @@ pub fn join_rel(root: &Path, rel: &str) -> Result<PathBuf, PathError> {
         return Err(PathError::Escape(rel.into()));
     }
     Ok(path)
+}
+
+pub fn display_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    text.into_owned()
 }
 
 pub fn rel_string(path: &Path) -> String {

@@ -5,8 +5,8 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::ignore::is_excluded_name;
-use crate::store::{blob_exists, write_blob, BlobError};
-use crate::util::{file_mode, human_size, is_reparse, mtime_ns, rel_string};
+use crate::store::{write_blob, BlobError};
+use crate::util::{file_mode, human_size, mtime_ns, rel_string};
 
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -81,7 +81,7 @@ pub fn manifest_of(
                 return false;
             }
             let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-            !(is_dir && is_reparse(entry.path()))
+            !(is_dir && reparse_entry(entry))
         });
 
     let mut manifest = Manifest::empty();
@@ -102,7 +102,7 @@ pub fn manifest_of(
             continue;
         };
         let relative = rel_string(relative);
-        let meta = match fs::symlink_metadata(path) {
+        let meta = match entry.metadata() {
             Ok(meta) => meta,
             Err(error) => {
                 manifest.skipped.push(Skipped {
@@ -114,7 +114,7 @@ pub fn manifest_of(
             }
         };
 
-        if kind.is_symlink() || is_reparse(path) {
+        if kind.is_symlink() || reparse_entry(&entry) {
             manifest.skipped.push(Skipped {
                 path: relative,
                 size: meta.len(),
@@ -142,9 +142,9 @@ pub fn manifest_of(
         }
 
         let modified = mtime_ns(&meta);
-        let reused = cache.get(&relative).filter(|old| {
-            old.size == size && old.mtime_ns == modified && blob_exists(blob_dir, &old.hash)
-        });
+        let reused = cache
+            .get(&relative)
+            .filter(|old| old.size == size && old.mtime_ns == modified);
         if let Some(old) = reused {
             manifest.entries.insert(
                 relative.clone(),
@@ -191,4 +191,103 @@ pub fn manifest_of(
         .skipped
         .sort_by(|left, right| left.path.cmp(&right.path));
     Ok(manifest)
+}
+
+fn reparse_entry(entry: &::ignore::DirEntry) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        entry
+            .metadata()
+            .map(|meta| meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        entry
+            .file_type()
+            .map(|kind| kind.is_symlink())
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    fn keys(manifest: &Manifest) -> Vec<&str> {
+        manifest.entries.keys().map(String::as_str).collect()
+    }
+
+    #[test]
+    fn applies_gitignore_ctrlzignore_and_hardcoded_excludes() {
+        let root = TempDir::new().unwrap();
+        let blobs = TempDir::new().unwrap();
+        write(root.path(), "keep.txt", "keep");
+        write(root.path(), "ignored.txt", "ignored");
+        write(root.path(), "custom.log", "custom");
+        write(root.path(), "important.log", "important");
+        write(root.path(), "node_modules/pkg/index.js", "module");
+        write(root.path(), "target/debug/app", "binary");
+        write(root.path(), ".gitignore", "ignored.txt\n*.log\n");
+        write(
+            root.path(),
+            ".ctrlzignore",
+            "!important.log\n!node_modules/pkg/index.js\n",
+        );
+
+        let manifest = manifest_of(
+            root.path(),
+            blobs.path(),
+            1024 * 1024,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let files = keys(&manifest);
+
+        assert!(files.contains(&"keep.txt"));
+        assert!(files.contains(&"important.log"));
+        assert!(files.contains(&".gitignore"));
+        assert!(files.contains(&".ctrlzignore"));
+        assert!(!files.contains(&"ignored.txt"));
+        assert!(!files.contains(&"custom.log"));
+        assert!(!files.contains(&"node_modules/pkg/index.js"));
+        assert!(!files.contains(&"target/debug/app"));
+    }
+
+    #[test]
+    fn records_files_over_max_file_as_skipped() {
+        let root = TempDir::new().unwrap();
+        let blobs = TempDir::new().unwrap();
+        write(root.path(), "small.txt", "ok");
+        write(root.path(), "big.bin", "0123456789");
+
+        let manifest = manifest_of(
+            root.path(),
+            blobs.path(),
+            4,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(manifest.entries.contains_key("small.txt"));
+        assert!(!manifest.entries.contains_key("big.bin"));
+        let skipped = manifest
+            .skipped
+            .iter()
+            .find(|entry| entry.path == "big.bin")
+            .unwrap();
+        assert!(skipped.reason.contains("--max-file"));
+    }
 }

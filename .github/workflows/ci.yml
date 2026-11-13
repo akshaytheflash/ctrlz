@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: opencode plugin test
+        run: node --test tests/opencode/*.test.mjs
+
+      - name: Release build
+        if: runner.os == 'Linux'
+        run: cargo build --release
+
+      - name: Release size and dependency check
+        if: runner.os == 'Linux'
+        run: |
+          size=$(stat -c%s target/release/ctrlz)
+          test "$size" -lt 8388608
+          if cargo tree | grep -Eq '(^|[ /])(reqwest|hyper|tokio|ureq|isahc|surf)( |$)'; then
+            echo "networking crate found in the dependency tree"
+            exit 1
+          fi

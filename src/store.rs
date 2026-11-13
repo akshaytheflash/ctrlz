@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS files (
     mode INTEGER NOT NULL,
     mtime_ns INTEGER NOT NULL,
     PRIMARY KEY (turn_id, path)
-);
-CREATE INDEX IF NOT EXISTS files_hash ON files(hash);
+) WITHOUT ROWID;
+-- Manifest copies are the hot path and no query needs a hash index.
+DROP INDEX IF EXISTS files_hash;
 CREATE TABLE IF NOT EXISTS skipped (
     turn_id INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
     path TEXT NOT NULL,
@@ -125,47 +126,48 @@ pub fn home() -> Result<PathBuf, StoreError> {
             return Ok(PathBuf::from(value));
         }
     }
+    default_home()
+}
 
-    #[cfg(windows)]
-    {
-        if let Some(value) = std::env::var_os("LOCALAPPDATA") {
+#[cfg(windows)]
+fn default_home() -> Result<PathBuf, StoreError> {
+    if let Some(value) = std::env::var_os("LOCALAPPDATA") {
+        return Ok(PathBuf::from(value).join("ctrlz"));
+    }
+    if let Some(value) = std::env::var_os("USERPROFILE") {
+        return Ok(PathBuf::from(value)
+            .join("AppData")
+            .join("Local")
+            .join("ctrlz"));
+    }
+    Err(StoreError::NoHome)
+}
+
+#[cfg(target_os = "macos")]
+fn default_home() -> Result<PathBuf, StoreError> {
+    if let Some(value) = std::env::var_os("HOME") {
+        return Ok(PathBuf::from(value)
+            .join("Library")
+            .join("Application Support")
+            .join("ctrlz"));
+    }
+    Err(StoreError::NoHome)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn default_home() -> Result<PathBuf, StoreError> {
+    if let Some(value) = std::env::var_os("XDG_DATA_HOME") {
+        if !value.is_empty() {
             return Ok(PathBuf::from(value).join("ctrlz"));
         }
-        if let Some(value) = std::env::var_os("USERPROFILE") {
-            return Ok(PathBuf::from(value)
-                .join("AppData")
-                .join("Local")
-                .join("ctrlz"));
-        }
-        return Err(StoreError::NoHome);
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(value) = std::env::var_os("HOME") {
-            return Ok(PathBuf::from(value)
-                .join("Library")
-                .join("Application Support")
-                .join("ctrlz"));
-        }
-        return Err(StoreError::NoHome);
+    if let Some(value) = std::env::var_os("HOME") {
+        return Ok(PathBuf::from(value)
+            .join(".local")
+            .join("share")
+            .join("ctrlz"));
     }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        if let Some(value) = std::env::var_os("XDG_DATA_HOME") {
-            if !value.is_empty() {
-                return Ok(PathBuf::from(value).join("ctrlz"));
-            }
-        }
-        if let Some(value) = std::env::var_os("HOME") {
-            return Ok(PathBuf::from(value)
-                .join(".local")
-                .join("share")
-                .join("ctrlz"));
-        }
-        return Err(StoreError::NoHome);
-    }
+    Err(StoreError::NoHome)
 }
 
 pub fn project_id(root: &Path) -> String {
@@ -175,8 +177,12 @@ pub fn project_id(root: &Path) -> String {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        let current = fs::canonicalize(path).map_err(|e| StoreError::fs(path, e))?;
         let home = home()?;
+        Self::open_with(&home, path)
+    }
+
+    pub fn open_with(home: &Path, path: &Path) -> Result<Self, StoreError> {
+        let current = fs::canonicalize(path).map_err(|e| StoreError::fs(path, e))?;
         let projects = home.join("projects");
 
         let mut best: Option<(usize, PathBuf)> = None;
@@ -212,8 +218,12 @@ impl Store {
     }
 
     pub fn init(path: &Path) -> Result<(Self, bool), StoreError> {
-        let root = fs::canonicalize(path).map_err(|e| StoreError::fs(path, e))?;
         let home = home()?;
+        Self::init_with(&home, path)
+    }
+
+    pub fn init_with(home: &Path, path: &Path) -> Result<(Self, bool), StoreError> {
+        let root = fs::canonicalize(path).map_err(|e| StoreError::fs(path, e))?;
         let dir = home.join("projects").join(project_id(&root));
         let metadata = dir.join("project.json");
 
@@ -449,6 +459,24 @@ impl Store {
         Ok(manifest)
     }
 
+    pub fn touch_turn(
+        &mut self,
+        id: i64,
+        agent: &str,
+        session: &str,
+        label: &str,
+    ) -> Result<Turn, StoreError> {
+        self.conn.execute(
+            "UPDATE turns SET agent = ?1, session = ?2, started_at = ?3, label = ?4 \
+             WHERE id = ?5",
+            params![agent, session, now_ms(), label, id],
+        )?;
+        self.turn(id)?.ok_or_else(|| StoreError::Fs {
+            path: self.project_dir.display().to_string(),
+            source: io::Error::other(format!("turn {id} disappeared while updating")),
+        })
+    }
+
     pub fn record_turn(
         &mut self,
         manifest: &Manifest,
@@ -458,7 +486,18 @@ impl Store {
     ) -> Result<Turn, StoreError> {
         let previous_id = self.last_turn_id()?;
         let previous = self.cached_entries(previous_id)?;
+        self.record_turn_using(manifest, previous_id, &previous, agent, session, label)
+    }
 
+    pub fn record_turn_using(
+        &mut self,
+        manifest: &Manifest,
+        previous_id: Option<i64>,
+        previous: &HashMap<String, Cached>,
+        agent: &str,
+        session: &str,
+        label: &str,
+    ) -> Result<Turn, StoreError> {
         let mut added = 0i64;
         let mut modified = 0i64;
         for (path, entry) in &manifest.entries {
@@ -502,7 +541,7 @@ impl Store {
         }
 
         for (path, entry) in &manifest.entries {
-            let unchanged = previous.get(path).map_or(false, |old| {
+            let unchanged = previous.get(path).is_some_and(|old| {
                 old.hash == entry.hash && old.size == entry.size && old.mtime_ns == entry.mtime_ns
             });
             if unchanged {
@@ -523,7 +562,7 @@ impl Store {
             )?;
         }
 
-        for (path, old) in &previous {
+        for (path, old) in previous {
             if manifest.entries.contains_key(path) {
                 continue;
             }
@@ -607,7 +646,12 @@ pub fn write_blob(blob_dir: &Path, hash: &str, content: &[u8]) -> Result<(bool, 
     if let Ok(meta) = fs::metadata(&path) {
         return Ok((false, meta.len()));
     }
-    let shard = path.parent().expect("blob path always has a shard");
+    let Some(shard) = path.parent() else {
+        return Err(BlobError::Write {
+            path: path.display().to_string(),
+            source: io::Error::other("blob path has no parent directory"),
+        });
+    };
     fs::create_dir_all(shard).map_err(|e| BlobError::Write {
         path: shard.display().to_string(),
         source: e,
@@ -620,43 +664,66 @@ pub fn write_blob(blob_dir: &Path, hash: &str, content: &[u8]) -> Result<(bool, 
         })?;
     let length = compressed.len() as u64;
 
-    let temp = shard.join(format!(".{}.{}.{}.tmp", hash, std::process::id(), now_ms()));
-    let mut file = match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            return Ok((false, length));
-        }
-        Err(error) => {
+    let mut last_error = None;
+    for attempt in 0..3 {
+        let temp = shard.join(format!(
+            ".{}.{}.{}.{}.tmp",
+            hash,
+            std::process::id(),
+            now_ms(),
+            attempt
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                last_error = Some(error);
+                continue;
+            }
+            Err(error) => {
+                return Err(BlobError::Write {
+                    path: temp.display().to_string(),
+                    source: error,
+                })
+            }
+        };
+        if let Err(error) = file.write_all(&compressed).and_then(|()| file.sync_all()) {
+            discard_temp(&temp);
             return Err(BlobError::Write {
                 path: temp.display().to_string(),
                 source: error,
-            })
+            });
         }
-    };
-    if let Err(error) = file.write_all(&compressed).and_then(|()| file.sync_all()) {
-        let _ = fs::remove_file(&temp);
-        return Err(BlobError::Write {
-            path: temp.display().to_string(),
-            source: error,
-        });
-    }
-    drop(file);
+        drop(file);
 
-    if let Err(error) = fs::rename(&temp, &path) {
-        let _ = fs::remove_file(&temp);
-        if path.is_file() {
-            return Ok((false, length));
+        if let Err(error) = fs::rename(&temp, &path) {
+            discard_temp(&temp);
+            if path.is_file() {
+                return Ok((false, length));
+            }
+            return Err(BlobError::Write {
+                path: path.display().to_string(),
+                source: error,
+            });
         }
-        return Err(BlobError::Write {
-            path: path.display().to_string(),
-            source: error,
-        });
+        return Ok((true, length));
     }
-    Ok((true, length))
+
+    Err(BlobError::Write {
+        path: path.display().to_string(),
+        source: last_error.unwrap_or_else(|| io::Error::other("could not create a temporary blob")),
+    })
+}
+
+fn discard_temp(path: &Path) {
+    if let Err(error) = fs::remove_file(path) {
+        if error.kind() != io::ErrorKind::NotFound {
+            eprintln!("ctrlz: could not remove {}: {error}", path.display());
+        }
+    }
 }
 
 pub fn read_blob(blob_dir: &Path, hash: &str) -> Result<Vec<u8>, BlobError> {
@@ -669,4 +736,50 @@ pub fn read_blob(blob_dir: &Path, hash: &str) -> Result<Vec<u8>, BlobError> {
         hash: hash.to_string(),
         message: e.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn blob_count(dir: &Path) -> usize {
+        let mut count = 0;
+        for shard in fs::read_dir(dir).unwrap() {
+            for file in fs::read_dir(shard.unwrap().path()).unwrap() {
+                if file.unwrap().path().is_file() {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn the_same_content_is_stored_once() {
+        let dir = TempDir::new().unwrap();
+        let content = b"same bytes";
+        let hash = blake3::hash(content).to_hex().to_string();
+
+        let (first, first_size) = write_blob(dir.path(), &hash, content).unwrap();
+        let (second, second_size) = write_blob(dir.path(), &hash, content).unwrap();
+
+        assert!(first);
+        assert!(!second);
+        assert_eq!(first_size, second_size);
+        assert_eq!(blob_count(dir.path()), 1);
+        assert_eq!(read_blob(dir.path(), &hash).unwrap(), content);
+    }
+
+    #[test]
+    fn different_content_gets_a_second_blob() {
+        let dir = TempDir::new().unwrap();
+        let first = blake3::hash(b"one").to_hex().to_string();
+        let second = blake3::hash(b"two").to_hex().to_string();
+
+        write_blob(dir.path(), &first, b"one").unwrap();
+        write_blob(dir.path(), &second, b"two").unwrap();
+
+        assert_eq!(blob_count(dir.path()), 2);
+    }
 }
