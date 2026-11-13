@@ -2,13 +2,16 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
+use crate::diff::{detect_renames, diff_manifests, unified, Kind};
+use crate::manifest::manifest_of;
+use crate::restore::{apply_plan, plan_restore};
 use crate::snapshot::{mark_at, MarkOptions, DEFAULT_MAX_FILE};
-use crate::store::Store;
-use crate::util::{format_ago, human_size, parse_duration, parse_size};
+use crate::store::{read_blob, Store};
+use crate::util::{format_ago, format_timestamp, human_size, parse_duration, parse_size};
 
 #[derive(Parser)]
 #[command(
@@ -48,6 +51,14 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Show the file-level changes of a turn
+    Show { n: i64 },
+    /// Print a unified diff for a turn
+    Diff { n: i64 },
+    /// Restore a turn (default: the snapshot before the last agent turn)
+    Undo { n: Option<i64> },
+    /// Restore a specific turn
+    Back { n: i64 },
 }
 
 pub fn run() -> Result<()> {
@@ -62,6 +73,10 @@ pub fn run() -> Result<()> {
             max_file,
         } => mark(label, agent, session, if_stale, max_file),
         Command::List { limit } => list(limit),
+        Command::Show { n } => show(n),
+        Command::Diff { n } => diff(n),
+        Command::Undo { n } => undo(n),
+        Command::Back { n } => undo(Some(n)),
     }
 }
 
@@ -243,4 +258,150 @@ fn list(limit: usize) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn show(n: i64) -> Result<()> {
+    let cwd = std::env::current_dir().context("cannot read the current directory")?;
+    let store = Store::open(&cwd)?;
+    let turn = store
+        .turn(n)?
+        .ok_or_else(|| anyhow!("turn {n} not found"))?;
+    let previous = store.previous_turn_id(n)?;
+    let before = store.manifest_of_turn(previous)?;
+    let after = store.manifest_of_turn(Some(n))?;
+    let changes = detect_renames(diff_manifests(&before, &after));
+
+    println!(
+        "turn {}  {}  {}  {}",
+        turn.id,
+        turn.agent,
+        format_timestamp(turn.started_at),
+        format_ago(turn.started_at)
+    );
+    if !turn.session.is_empty() {
+        println!("session {}", turn.session);
+    }
+    println!(
+        "label {}  files {}  +{} ~{} -{}  {} on disk",
+        empty_as(&turn.label, "-"),
+        turn.file_count,
+        turn.added,
+        turn.modified,
+        turn.deleted,
+        human_size(turn.bytes.max(0) as u64)
+    );
+
+    for change in &changes {
+        match &change.kind {
+            Kind::Added => println!(
+                "+ {}  {}",
+                change.path,
+                human_size(change.new.as_ref().map(|e| e.size).unwrap_or(0))
+            ),
+            Kind::Modified => println!("~ {}", change.path),
+            Kind::Deleted => println!("- {}", change.path),
+            Kind::Renamed { from } => println!("R {} -> {}", from, change.path),
+        }
+    }
+    for skipped in store.skipped_summary(n)? {
+        println!("! skipped {skipped}");
+    }
+    if changes.is_empty() {
+        println!("no file changes");
+    }
+    Ok(())
+}
+
+fn diff(n: i64) -> Result<()> {
+    let cwd = std::env::current_dir().context("cannot read the current directory")?;
+    let store = Store::open(&cwd)?;
+    if store.turn(n)?.is_none() {
+        return Err(anyhow!("turn {n} not found"));
+    }
+    let previous = store.previous_turn_id(n)?;
+    let before = store.manifest_of_turn(previous)?;
+    let after = store.manifest_of_turn(Some(n))?;
+    let changes = detect_renames(diff_manifests(&before, &after));
+    if changes.is_empty() {
+        println!("no changes in turn {n}");
+        return Ok(());
+    }
+
+    for change in changes {
+        if let Kind::Renamed { from } = &change.kind {
+            println!("rename {from} -> {}", change.path);
+            continue;
+        }
+        let old = match change.old.as_ref() {
+            Some(entry) => Some(load_blob(&store, &entry.hash)?),
+            None => None,
+        };
+        let new = match change.new.as_ref() {
+            Some(entry) => Some(load_blob(&store, &entry.hash)?),
+            None => None,
+        };
+        print!("{}", unified(old.as_deref(), new.as_deref(), &change.path));
+    }
+    Ok(())
+}
+
+fn load_blob(store: &Store, hash: &str) -> Result<Vec<u8>> {
+    read_blob(&store.blob_dir(), hash)
+        .with_context(|| format!("cannot read blob {hash}; the store may be incomplete"))
+}
+
+fn undo(n: Option<i64>) -> Result<()> {
+    let cwd = std::env::current_dir().context("cannot read the current directory")?;
+    let mut store = Store::open(&cwd)?;
+    let last = store
+        .last_turn()?
+        .ok_or_else(|| anyhow!("no turns yet. run `ctrlz mark` first"))?;
+
+    let target_id = match n {
+        Some(id) => id,
+        None if last.label == "stop" => store.previous_turn_id(last.id)?.unwrap_or(last.id),
+        None => last.id,
+    };
+    if target_id == 0 {
+        return Err(anyhow!(
+            "there is no snapshot before turn {}; run `ctrlz back 1` to restore the first snapshot",
+            last.id
+        ));
+    }
+    let target = store
+        .turn(target_id)?
+        .ok_or_else(|| anyhow!("turn {target_id} not found"))?;
+    let target_manifest = store.manifest_of_turn(Some(target_id))?;
+    let cache = store.cached_entries(Some(last.id))?;
+    let current = manifest_of(&store.root, &store.blob_dir(), DEFAULT_MAX_FILE, &cache)?;
+    let plan = plan_restore(&current, &target_manifest, cfg!(windows))?;
+
+    if plan.deletes.is_empty() && plan.writes.is_empty() {
+        println!(
+            "turn {} already matches the working tree; nothing to do",
+            target.id
+        );
+        return Ok(());
+    }
+
+    let snapshot = store.record_turn(&current, "ctrlz", "", "pre-restore")?;
+    println!("ctrlz: pre-restore snapshot is turn {}", snapshot.id);
+
+    let report = apply_plan(&store.root, &store.blob_dir(), &plan)?;
+    println!(
+        "restored turn {}: {} written, {} deleted, {} unchanged",
+        target.id, report.written, report.deleted, report.unchanged
+    );
+    for skipped in report.skipped {
+        println!("skipped {skipped}");
+    }
+    Ok(())
+}
+
+fn empty_as<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    if value.is_empty() {
+        fallback
+    } else {
+        value
+    }
 }

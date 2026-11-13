@@ -1,6 +1,8 @@
 mod cli;
+mod diff;
 mod ignore;
 mod manifest;
+mod restore;
 mod snapshot;
 mod store;
 mod util;
