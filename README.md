@@ -149,3 +149,7 @@ cargo test --release --test perf -- --ignored --nocapture
 ```
 
 CI runs the same commands on Windows, macOS, and Linux.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
