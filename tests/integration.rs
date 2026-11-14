@@ -1,6 +1,7 @@
 mod common;
 
 use std::fs;
+#[cfg(windows)]
 use std::process::Command as ProcessCommand;
 use std::time::UNIX_EPOCH;
 
