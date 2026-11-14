@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<!-- ctrlz launch film — made with onetake (PolyForm Noncommercial 1.0.0).
+     concept: the shadow tree. One continuous take; the block cursor is the hand,
+     the shadow copy is the thing that survives every boundary. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ctrlz — the shadow tree</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#0c111a}
+body{color:var(--ink);font-family:var(--text);-webkit-font-smoothing:antialiased}
+#stage{position:absolute;inset:0;overflow:hidden;background:var(--ground)}
+#ground{position:absolute;inset:0;background:
+  radial-gradient(980px 620px at 50% 66%, rgba(94,234,212,.085), transparent 70%),
+  radial-gradient(720px 480px at 50% 26%, rgba(94,234,212,.05), transparent 72%),
+  linear-gradient(180deg,#0c111a 0%,#080c13 54%,#06080c 100%)}
+#glow{position:absolute;left:410px;top:250px;width:1100px;height:760px;
+  background:radial-gradient(closest-side,rgba(94,234,212,.13),rgba(94,234,212,.03) 55%,transparent 74%);
+  filter:blur(10px);will-change:transform,opacity}
+#lattice{position:absolute;left:0;top:0;width:1920px;height:1080px}
+#grain{position:absolute;inset:0;opacity:.30;mix-blend-mode:soft-light;pointer-events:none}
+#vignette{position:absolute;inset:0;pointer-events:none;
+  box-shadow:inset 0 0 300px 110px rgba(0,0,0,.68),inset 0 0 80px 0 rgba(0,0,0,.35)}
+#world{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;will-change:transform}
+
+.lab{position:absolute;font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute);white-space:nowrap}
+#treeLab{left:300px;top:50px}
+#shadowLab{left:300px;top:400px;color:var(--accent)}
+#shadowRule{position:absolute;left:300px;top:392px;width:1320px;height:1px;background:linear-gradient(90deg,rgba(94,234,212,.34),rgba(94,234,212,.06) 72%,transparent)}
+#shadowRule i{position:absolute;left:0;top:-2px;width:44px;height:5px;background:var(--accent);opacity:.85}
+#spine{position:absolute;left:958px;top:360px;width:2px;height:110px;background:linear-gradient(180deg,rgba(94,234,212,.05),rgba(94,234,212,.42),rgba(94,234,212,.05));opacity:.55}
+#spine i{position:absolute;left:-3px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 14px rgba(94,234,212,.7)}
+
+/* terminal */
+#term{position:absolute;left:360px;top:470px;width:1200px;height:390px;border:1px solid var(--line);
+  border-radius:18px;overflow:hidden;background:#0d1119;
+  box-shadow:0 46px 120px -40px rgba(0,0,0,.9),0 0 0 1px rgba(94,234,212,.055);will-change:transform,opacity}
+#termBar{position:absolute;left:0;right:0;top:0;height:42px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:#0b0f16}
+#termBar .left{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:14px;color:var(--mute)}
+#termBar .left b{color:var(--ink);font-weight:400}
+#termBar .left i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px rgba(94,234,212,.6)}
+#termBar .right{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);border:1px solid rgba(94,234,212,.32);padding:5px 9px;border-radius:999px}
+#termBody{position:absolute;left:0;right:0;top:42px;bottom:0;padding:16px 24px;font-family:var(--mono);font-size:18px;line-height:27px;color:var(--ink)}
+.ln{height:27px;white-space:pre;display:flex;align-items:center;opacity:0}
+.ln .tx{white-space:pre;display:inline-block}
+.ln .p{color:var(--mute)}
+.ln .ok{color:var(--accent)}
+.ln .bad{color:var(--accent2)}
+.ln .dim{color:var(--mute)}
+.ln .w{color:var(--ink)}
+.ln.small{font-size:17px}
+#termFade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 88%,rgba(13,17,25,.90));pointer-events:none}
+
+/* file cards */
+.card,.shadow{position:absolute;width:380px;height:250px;border-radius:16px;overflow:hidden;will-change:transform,opacity}
+.card{background:linear-gradient(180deg,#1c2636,#131b27);border:1px solid var(--line);
+  box-shadow:0 28px 70px -30px rgba(0,0,0,.9),0 1px 0 rgba(255,255,255,.025) inset;z-index:2}
+.card .hd,.shadow .hd{position:absolute;left:0;right:0;top:0;height:44px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-family:var(--mono);font-size:15px;color:var(--mute)}
+.card .hd b,.shadow .hd b{color:var(--ink);font-weight:400}
+.card .code,.shadow .code{position:absolute;left:0;right:0;top:44px;bottom:0;padding:16px 18px;font-family:var(--mono);font-size:17px;line-height:27px;white-space:pre;color:var(--ink)}
+.card .code .k{color:var(--accent)}
+.card .code .r{color:var(--accent2)}
+.stamp{position:absolute;right:14px;bottom:14px;font-family:var(--mono);font-size:12px;letter-spacing:.14em;
+  color:var(--accent2);border:1px solid rgba(255,107,107,.55);background:rgba(255,107,107,.055);
+  padding:5px 9px;border-radius:6px;transform:rotate(-4deg);opacity:0}
+.shadow{background:rgba(94,234,212,.065);border:1px solid rgba(94,234,212,.62);z-index:1;
+  box-shadow:0 0 56px -6px rgba(94,234,212,.30),0 0 0 1px rgba(94,234,212,.08) inset;opacity:0}
+.shadow .hd{border-bottom-color:rgba(94,234,212,.22);color:rgba(94,234,212,.82)}
+.shadow .hd b{color:var(--accent)}
+.shadow .code{color:rgba(230,237,247,.76)}
+.shadow .code .k{color:var(--accent)}
+.shadow.empty{border-style:dashed;background:rgba(94,234,212,.012)}
+.shadow.empty .code{color:rgba(94,234,212,.48);font-size:14px;letter-spacing:.04em}
+#c1{left:300px;top:96px}
+#c2{left:770px;top:96px}
+#c3{left:1240px;top:96px}
+#s1{left:300px;top:96px}
+#s2{left:770px;top:96px}
+#s3{left:1240px;top:96px}
+#c1 .line2,#s1 .line2{position:absolute;left:18px;top:87px}
+#c1 .line2.broken{color:var(--accent2)}
+#c2 .stamp,#c3 .stamp{opacity:0}
+
+/* test badge */
+#test{position:absolute;left:1300px;top:400px;height:42px;padding:0 15px;border-radius:999px;
+  border:1px solid var(--line);background:#0d1119;display:flex;align-items:center;gap:10px;
+  font-family:var(--mono);font-size:15px;color:var(--mute);opacity:0;z-index:4;white-space:nowrap}
+#test i{width:8px;height:8px;border-radius:50%;background:var(--mute)}
+#test.fail{border-color:rgba(255,107,107,.55);color:var(--accent2)}
+#test.fail i{background:var(--accent2);box-shadow:0 0 12px rgba(255,107,107,.6)}
+#test.pass{border-color:rgba(94,234,212,.5);color:var(--accent)}
+#test.pass i{background:var(--accent);box-shadow:0 0 12px rgba(94,234,212,.65)}
+
+/* end card */
+#mark{position:absolute;left:960px;top:500px;transform:translate(-50%,-50%);display:flex;z-index:31;
+  font-family:var(--mono);font-size:190px;line-height:1;letter-spacing:-.085em;font-weight:600;color:var(--ink);opacity:0}
+#mark span{display:inline-block;opacity:0;transform-origin:50% 88%}
+#underline{position:absolute;left:0;top:0;height:3px;background:var(--accent);box-shadow:0 0 24px rgba(94,234,212,.45);opacity:0}
+#tag{position:absolute;left:960px;top:660px;transform:translateX(-50%);font-family:var(--text);font-size:34px;
+  line-height:1.35;color:var(--mute);text-align:center;white-space:nowrap;opacity:0}
+#tag b{color:var(--ink);font-weight:500}
+#tag .a{color:var(--accent)}
+#cta{position:absolute;left:960px;top:758px;transform:translateX(-50%);display:flex;gap:12px;opacity:0}
+.pill{height:54px;padding:0 24px;border:1px solid var(--line);border-radius:11px;background:#0d1119;
+  display:flex;align-items:center;font-family:var(--mono);font-size:22px;color:var(--ink);white-space:nowrap}
+.pill .p{color:var(--mute);margin-right:8px}
+.pill.hot{border-color:rgba(94,234,212,.48);background:rgba(94,234,212,.055);color:var(--accent)}
+#sub{position:absolute;left:960px;top:840px;transform:translateX(-50%);font-family:var(--mono);font-size:14px;
+  letter-spacing:.10em;color:var(--mute);text-transform:uppercase;white-space:nowrap;opacity:0}
+
+#seal{position:absolute;left:960px;top:540px;width:2px;height:2px;border:2px solid var(--accent);border-radius:50%;
+  transform:translate(-50%,-50%);opacity:0;box-shadow:0 0 40px rgba(94,234,212,.25),0 0 2px rgba(94,234,212,.6);will-change:transform,opacity}
+#block{position:absolute;left:0;top:0;width:14px;height:26px;background:var(--accent);border-radius:2px;
+  box-shadow:0 0 18px rgba(94,234,212,.55),0 0 2px rgba(255,255,255,.6);z-index:30;will-change:transform,opacity}
+#burst{position:absolute;inset:0;z-index:40;background:#080b11;opacity:0;pointer-events:none;
+  display:flex;flex-direction:column;justify-content:center;padding:0 170px}
+#burst .top{position:absolute;left:170px;right:170px;top:64px;display:flex;justify-content:space-between;
+  font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--mute)}
+#burst .top b{color:var(--accent2);font-weight:400}
+#burst .body{will-change:transform,opacity;transform-origin:0% 60%}
+#burst .sign{font-family:var(--mono);font-size:112px;line-height:1;color:var(--accent2);margin-bottom:10px}
+#burst .file{font-family:var(--mono);font-size:38px;line-height:1;color:var(--mute);margin-bottom:24px}
+#burst .text{font-family:var(--mono);font-size:68px;line-height:1.18;color:var(--ink);white-space:pre-wrap}
+#burst .text .r{color:var(--accent2)}
+#hud{position:absolute;right:14px;bottom:10px;font:13px var(--mono);color:#ff6b6b;display:none}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="ground"></div>
+  <div id="glow"></div>
+  <canvas id="lattice" width="1920" height="1080"></canvas>
+  <div id="grain"></div>
+  <div id="vignette"></div>
+
+  <div id="world">
+    <div id="treeLab" class="lab">working tree</div>
+    <div id="shadowRule"><i></i></div>
+    <div id="shadowLab" class="lab">shadow store</div>
+    <div id="spine"><i></i></div>
+
+    <div id="c1" class="card">
+      <div class="hd"><b>src/App.tsx</b><span>modified</span></div>
+      <div class="code"><span class="k">export const</span> App = () =&gt;
+<span id="c1line2"><span class="w">&lt;main&gt;checkout&lt;/main&gt;</span></span></div>
+    </div>
+    <div id="s1" class="shadow">
+      <div class="hd"><b>src/App.tsx</b><span class="slab">snapshot</span></div>
+      <div class="code"><span class="k">export const</span> App = () =&gt;
+<span class="w">&lt;main&gt;checkout&lt;/main&gt;</span></div>
+    </div>
+
+    <div id="c2" class="card">
+      <div class="hd"><b>.env</b><span>ignored but real</span></div>
+      <div class="code"><span class="k">STRIPE_KEY</span>=sk_live_51N...
+<span class="dim"># never committed</span></div>
+      <div class="stamp">DELETED</div>
+    </div>
+    <div id="s2" class="shadow">
+      <div class="hd"><b>.env</b><span class="slab">snapshot</span></div>
+      <div class="code"><span class="k">STRIPE_KEY</span>=sk_live_51N...
+<span class="dim"># never committed</span></div>
+    </div>
+
+    <div id="c3" class="card">
+      <div class="hd"><b>src/new.ts</b><span>created</span></div>
+      <div class="code"><span class="k">export const</span> newThing = <span class="r">true</span>
+<span class="dim">// agent wrote this</span></div>
+      <div class="stamp">CREATED</div>
+    </div>
+    <div id="s3" class="shadow empty">
+      <div class="hd"><b>src/new.ts</b><span class="slab">not in snapshot</span></div>
+      <div class="code">— absent —</div>
+    </div>
+
+    <div id="term">
+      <div id="termBar">
+        <div class="left"><i></i><b>ctrlz</b><span>~/checkout</span></div>
+        <div class="right">local · offline</div>
+      </div>
+      <div id="termBody"></div>
+      <div id="termFade"></div>
+    </div>
+
+    <div id="test"><i></i><span>npm test</span><b id="testMark">✕</b></div>
+
+    <div id="seal"></div>
+    <div id="mark"></div>
+    <div id="underline"></div>
+    <div id="tag">git protects commits. <b>ctrlz</b> protects <span class="a">the 30 seconds between them.</span></div>
+    <div id="cta">
+      <div class="pill hot"><span class="p">$</span>cargo install --path .</div>
+      <div class="pill"><span class="p">$</span>ctrlz init</div>
+    </div>
+    <div id="sub">no daemon · no network · no account</div>
+    <div id="block"></div>
+  </div>
+
+  <div id="burst">
+    <div class="top"><span>agent diff</span><b>turn 2 · claude</b></div>
+    <div class="body" id="burstBody">
+      <div class="sign" id="burstSign">+</div>
+      <div class="file" id="burstFile">src/App.tsx</div>
+      <div class="text" id="burstText">&lt;main&gt;<span class="r">broken</span>&lt;/main&gt;</div>
+    </div>
+  </div>
+  <div id="hud"></div>
+</div>
+<script src="motion.js"></script>
+<script src="look.js"></script>
+<script>
+(function () {
+'use strict';
+const {clamp, lerp, sstep, ssstep, seg, spline} = OM;
+const $ = id => document.getElementById(id);
+const DUR = 22.0, FPS = 30;
+
+// ─────────────────────────────── timeline ───────────────────────────────
+const T = {
+  termIn: 0.25,
+  typeMark: 0.80, markCps: 30,
+  markEnter: 2.05,
+  cardsIn: 2.55,
+  shadowIn: 2.95,
+  edit1: 4.15, edit2: 4.65, edit3: 5.15,
+  testFail: 5.85,
+  listType: 6.55, listCps: 34,
+  listEnter: 7.10, listRows: 7.18,
+  undoType: 9.05, undoCps: 28,
+  undoEnter: 9.90,
+  rewind0: 9.95, rewind1: 12.15,
+  testPass: 12.05,
+  gitType: 13.20, gitCps: 34,
+  gitOut: 13.88,
+  gather0: 15.35, gather1: 16.95,
+  markIn: 17.05,
+  tag: 17.75,
+  cta: 18.45,
+  sub: 18.85
+};
+
+const CMD_MARK = 'ctrlz mark --label before-agent';
+const CMD_LIST = 'ctrlz list';
+const CMD_UNDO = 'ctrlz undo';
+const CMD_GIT  = 'git status --porcelain';
+const OUT_MARK = 'ctrlz: turn 1 (claude), 4 files, +4 ~0 -0, 2.0 MB';
+const OUT_PRE  = 'ctrlz: pre-restore snapshot is turn 3';
+const OUT_REST = 'restored turn 1: 2 written, 1 deleted, 2 unchanged';
+const OUT_GIT  = '(no output — the tree is back)';
+const TABLE_H  = 'turn  time        agent       +add   ~mod   -del      on disk  label';
+const TABLE_2  = '   2  just now    claude      +1     ~1     -1           94 B  stop';
+const TABLE_1  = '   1  just now    claude      +4     ~0     -0         2.0 MB  before-agent';
+
+// ─────────────────────────────── camera ───────────────────────────────
+const KEYS = [
+  {t: 0.00, x: 590, y: 560, zoom: 2.05},
+  {t: 0.55, x: 560, y: 552, zoom: 2.12},
+  {t: 2.05, x: 560, y: 552, zoom: 2.12},
+  {t: 2.62, x: 960, y: 508, zoom: 1.02},
+  {t: 3.30, x: 960, y: 508, zoom: 1.02},
+  {t: 4.15, x: 500,  y: 270, zoom: 1.55, curve: OM.ease.expoInOut},
+  {t: 4.65, x: 960,  y: 270, zoom: 1.52, curve: OM.ease.expoInOut},
+  {t: 5.15, x: 1420, y: 270, zoom: 1.52, curve: OM.ease.expoInOut},
+  {t: 5.55, x: 960,  y: 500, zoom: 1.15, curve: OM.ease.cubicInOut},
+  {t: 5.70, x: 960,  y: 500, zoom: 1.15},
+  {t: 7.75, x: 960,  y: 500, zoom: 1.15},
+  {t: 8.55, x: 960,  y: 500, zoom: 1.15},
+  {t: 9.05, x: 960,  y: 540, zoom: 1.12, curve: OM.ease.sineInOut},
+  {t: 9.90, x: 960,  y: 500, zoom: 1.10},
+  {t: 10.35, x: 960, y: 365, zoom: 1.42, curve: OM.ease.cubicInOut},
+  {t: 12.15, x: 960, y: 360, zoom: 1.42},
+  {t: 12.45, x: 960, y: 480, zoom: 1.30, curve: OM.ease.cubicInOut},
+  {t: 14.10, x: 960, y: 480, zoom: 1.30},
+  {t: 15.20, x: 960, y: 540, zoom: 1.16, curve: OM.ease.cubicInOut},
+  {t: 16.95, x: 960, y: 540, zoom: 1.00, curve: OM.ease.cubicInOut},
+  {t: 17.05, x: 960, y: 540, zoom: 0.98},
+  {t: 22.00, x: 960, y: 540, zoom: 0.98}
+];
+const HITS = [[2.05, 3, 12], [4.15, 4, 11], [4.65, 4, 11], [5.15, 5, 11],
+              [9.90, 7, 10], [12.15, 8, 9], [17.05, 6, 10]];
+const STILLS = [[3.30, 4.05], [7.75, 8.55], [14.10, 15.20], [19.30, 22.00]];
+
+function stillMask(t) {
+  let m = 0;
+  for (const [a, b] of STILLS) m = Math.max(m, sstep(a - 0.10, a, t) * (1 - sstep(b, b + 0.10, t)));
+  return 1 - m;
+}
+function camAt(t) {
+  const typing = t < 2.05 || (t > 6.50 && t < 7.40) || (t > 9.05 && t < 9.90) ||
+                 (t > 13.20 && t < 13.90) || (t > 17.05 && t < 18.30);
+  const c = OM.camera(t, KEYS), e = stillMask(t) * (typing ? 0.9 : 3.6);
+  let x = c.x + e * (Math.sin(1.7 * t) + 0.6 * Math.sin(2.9 * t + 1)) / c.zoom;
+  let y = c.y + e * (Math.sin(1.3 * t + 2) + 0.5 * Math.sin(3.3 * t)) / c.zoom;
+  let rot = c.rot;
+  for (const [th, amp, decay] of HITS) {
+    const s = OM.shake(t, th, {amp, decay, seed: Math.round(th * 100)});
+    x += s.x / c.zoom; y += s.y / c.zoom; rot += s.rot;
+  }
+  return {x, y, zoom: c.zoom, rot};
+}
+
+// ─────────────────────────────── terminal lines ───────────────────────────────
+const termBody = $('termBody');
+const L = [];
+function makeLine(html, cls, cmd) {
+  const el = document.createElement('div');
+  el.className = 'ln' + (cls ? ' ' + cls : '');
+  const tx = document.createElement('span');
+  tx.className = 'tx';
+  tx.innerHTML = html;
+  el.appendChild(tx);
+  termBody.appendChild(el);
+  const line = {el, tx, html, cmd, plain: html.replace(/<[^>]+>/g, '')};
+  L.push(line);
+  return line;
+}
+makeLine('<span class="p">$</span> <span class="w">' + CMD_MARK + '</span>', null, CMD_MARK);
+makeLine('<span class="ok">ctrlz</span>: turn 1 (claude), 4 files, +4 ~0 -0, <span class="w">2.0 MB</span>');
+makeLine('<span class="p">$</span> <span class="w">' + CMD_LIST + '</span>', null, CMD_LIST);
+makeLine('<span class="dim">' + TABLE_H + '</span>', 'small');
+makeLine('<span class="dim">' + TABLE_2 + '</span>', 'small');
+makeLine('<span class="dim">' + TABLE_1 + '</span>', 'small');
+makeLine('<span class="p">$</span> <span class="w">' + CMD_UNDO + '</span>', null, CMD_UNDO);
+makeLine('<span class="ok">ctrlz</span>: pre-restore snapshot is <span class="w">turn 3</span>');
+makeLine('restored <span class="w">turn 1</span>: <span class="w">2 written, 1 deleted, 2 unchanged</span>');
+makeLine('<span class="p">$</span> <span class="w">' + CMD_GIT + '</span>', null, CMD_GIT);
+makeLine('<span class="dim"># </span><span class="ok">' + OUT_GIT + '</span>', 'small');
+for (const l of L) l.el.style.opacity = '0';
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function promptHTML(prefix) { return '<span class="p">$</span> <span class="w">' + esc(prefix) + '</span>'; }
+
+// ─────────────────────────────── measure ───────────────────────────────
+let MONO = 'monospace', TEXT = 'sans-serif', DISPLAY = 'sans-serif';
+let mctx = null;
+function mw(text, size) {
+  if (!mctx) return text.length * size * 0.60;
+  mctx.font = size + 'px ' + MONO;
+  return mctx.measureText(text).width;
+}
+function linePoint(i, n) {
+  const line = L[i];
+  const text = line.cmd ? '$ ' + line.cmd.slice(0, n) : line.plain.slice(0, n);
+  const x = 360 + 24 + 4 + mw(text, 18) + 2;
+  const y = 470 + 42 + 16 + i * 27 + 2;
+  return {x, y};
+}
+
+// ─────────────────────────────── cards / end ───────────────────────────────
+const c1 = $('c1'), c2 = $('c2'), c3 = $('c3');
+const s1 = $('s1'), s2 = $('s2'), s3 = $('s3');
+const test = $('test'), testMark = $('testMark');
+const mark = $('mark'), tag = $('tag'), cta = $('cta'), sub = $('sub'), underline = $('underline');
+const block = $('block'), world = $('world'), glow = $('glow');
+const MARK_LETTERS = [...'ctrlz'].map(ch => { const s = document.createElement('span'); s.textContent = ch; mark.appendChild(s); return s; });
+let MARK_X = [], MARK_W = [];
+
+function place(el, x, y, s, op) {
+  el.style.transform = 'translate(' + x.toFixed(2) + 'px,' + y.toFixed(2) + 'px) scale(' + s.toFixed(4) + ')';
+  el.style.opacity = op.toFixed(3);
+}
+function cardPop(t, t0, i) {
+  return OM.popIn(t, t0 + i * 0.08, {rise: 42, s0: 0.94, ds: 0.06});
+}
+
+// ─────────────────────────────── block cursor ───────────────────────────────
+const BLOCK = [
+  {t: 0.00, at: () => linePoint(0, 0), s: 1, op: 1},
+  {t: 0.55, at: () => linePoint(0, 0), s: 1, op: 1},
+  {t: 0.80, at: () => linePoint(0, 0), s: 1, op: 1},
+  {t: 2.05, at: () => linePoint(0, CMD_MARK.length), s: 1, op: 1},
+  {t: 2.20, at: () => linePoint(1, OUT_MARK.length), s: 1, op: 1},
+  {t: 2.55, x: 960, y: 400, s: 1.25, op: 1},
+  {t: 3.30, x: 960, y: 400, s: 1.25, op: 1},
+  {t: 4.15, x: 490, y: 220, s: 1.25, op: 1},
+  {t: 4.22, x: 490, y: 220, s: 1.10, op: 1},
+  {t: 4.35, x: 490, y: 220, s: 1.25, op: 1},
+  {t: 4.65, x: 960, y: 220, s: 1.25, op: 1},
+  {t: 4.72, x: 960, y: 220, s: 1.10, op: 1},
+  {t: 4.85, x: 960, y: 220, s: 1.25, op: 1},
+  {t: 5.15, x: 1430, y: 220, s: 1.25, op: 1},
+  {t: 5.22, x: 1430, y: 220, s: 1.10, op: 1},
+  {t: 5.35, x: 1430, y: 220, s: 1.25, op: 1},
+  {t: 5.45, at: () => linePoint(2, CMD_LIST.length), s: 1, op: 1},
+  {t: 6.55, at: () => linePoint(2, 0), s: 1, op: 1},
+  {t: 7.10, at: () => linePoint(2, CMD_LIST.length), s: 1, op: 1},
+  {t: 7.35, at: () => linePoint(5, TABLE_1.length), s: 1, op: 1},
+  {t: 8.55, at: () => linePoint(5, TABLE_1.length), s: 1, op: 1},
+  {t: 9.05, at: () => linePoint(6, 0), s: 1, op: 1},
+  {t: 9.90, at: () => linePoint(6, CMD_UNDO.length), s: 1, op: 1},
+  {t: 9.95, x: 960, y: 400, s: 1.25, op: 1},
+  {t: 10.35, x: 960, y: 340, s: 1.25, op: 1},
+  {t: 12.15, x: 960, y: 300, s: 1.25, op: 1},
+  {t: 12.45, at: () => linePoint(8, OUT_REST.length), s: 1, op: 1},
+  {t: 13.20, at: () => linePoint(9, 0), s: 1, op: 1},
+  {t: 13.88, at: () => linePoint(9, CMD_GIT.length), s: 1, op: 1},
+  {t: 14.10, at: () => linePoint(10, OUT_GIT.length + 2), s: 1, op: 1},
+  {t: 15.20, at: () => linePoint(10, OUT_GIT.length + 2), s: 1, op: 1},
+  {t: 15.35, x: 960, y: 540, s: 1.35, op: 1},
+  {t: 16.80, x: 960, y: 540, s: 1.60, op: 1},
+  {t: 17.05, at: () => markPoint(0), s: 3.1, op: 1},
+  {t: 17.16, at: () => markPoint(1), s: 3.1, op: 1},
+  {t: 17.27, at: () => markPoint(2), s: 3.1, op: 1},
+  {t: 17.38, at: () => markPoint(3), s: 3.1, op: 1},
+  {t: 17.49, at: () => markPoint(4), s: 3.1, op: 1},
+  {t: 17.60, at: () => markPoint(5), s: 3.1, op: 1},
+  {t: 22.00, at: () => markPoint(5), s: 3.1, op: 1}
+];
+function markPoint(n) {
+  if (!MARK_X.length) return {x: 900, y: 500};
+  const total = MARK_X[MARK_X.length - 1] + MARK_W[MARK_W.length - 1];
+  const start = 960 - total / 2;
+  if (n <= 0) return {x: start - 10, y: 500};
+  const i = Math.min(n, 5) - 1;
+  return {x: start + MARK_X[i] + MARK_W[i] + 3, y: 500};
+}
+function blockAt(t) {
+  if (t <= BLOCK[0].t) { const p = linePoint(0, 0); return {x: p.x, y: p.y, s: 1, op: 1}; }
+  let i = 0; while (i + 1 < BLOCK.length && BLOCK[i + 1].t < t) i++;
+  const a = BLOCK[i], b = BLOCK[Math.min(i + 1, BLOCK.length - 1)];
+  if (b.t === a.t) return {x: a.x || 0, y: a.y || 0, s: a.s, op: a.op};
+  const k = OM.ease.cubicInOut(seg(t, a.t, b.t));
+  const pa = a.at ? a.at() : {x: a.x, y: a.y};
+  const pb = b.at ? b.at() : {x: b.x, y: b.y};
+  return {x: lerp(pa.x, pb.x, k), y: lerp(pa.y, pb.y, k), s: lerp(a.s, b.s, k), op: lerp(a.op, b.op, k)};
+}
+function cursorAt(t) {
+  let b = blockAt(t);
+  if (t >= T.typeMark && t < T.markEnter) {
+    const m = OM.typeOn(t, T.typeMark, CMD_MARK, {cps: T.markCps});
+    const p = linePoint(0, m.str.length); b = {x: p.x, y: p.y, s: 1, op: 1};
+  } else if (t >= T.listType && t < T.listEnter) {
+    const m = OM.typeOn(t, T.listType, CMD_LIST, {cps: T.listCps});
+    const p = linePoint(2, m.str.length); b = {x: p.x, y: p.y, s: 1, op: 1};
+  } else if (t >= T.undoType && t < T.undoEnter) {
+    const m = OM.typeOn(t, T.undoType, CMD_UNDO, {cps: T.undoCps});
+    const p = linePoint(6, m.str.length); b = {x: p.x, y: p.y, s: 1, op: 1};
+  } else if (t >= T.gitType && t < T.gitOut) {
+    const m = OM.typeOn(t, T.gitType, CMD_GIT, {cps: T.gitCps});
+    const p = linePoint(9, m.str.length); b = {x: p.x, y: p.y, s: 1, op: 1};
+  }
+  return b;
+}
+
+// ─────────────────────────────── lattice + grain ───────────────────────────────
+const lcv = $('lattice'), lctx = lcv.getContext('2d');
+function drawLattice(cam, t) {
+  lctx.setTransform(1, 0, 0, 1, 0, 0); lctx.clearRect(0, 0, 1920, 1080);
+  const G = OM.lattice(cam, {depth: 1.24, spacing: 64, px: 1.25});
+  const a = 0.055 * (1 - sstep(17.0, 18.0, t) * 0.85);
+  lctx.setTransform(G.matrix[0], G.matrix[1], G.matrix[2], G.matrix[3], G.matrix[4], G.matrix[5]);
+  lctx.fillStyle = 'rgba(94,234,212,' + a.toFixed(4) + ')';
+  for (let x = G.x0; x <= G.x1; x += G.spacing) {
+    for (let y = G.y0; y <= G.y1; y += G.spacing) {
+      lctx.beginPath(); lctx.arc(x, y, G.r, 0, Math.PI * 2); lctx.fill();
+    }
+  }
+}
+
+// ─────────────────────────────── seek ───────────────────────────────
+function seek(t) {
+  const CAM = camAt(t), M = OM.view(CAM);
+  world.style.transform = 'matrix(' + M.map(v => v.toFixed(4)).join(',') + ')';
+  drawLattice(CAM, t);
+
+  const hot = sstep(T.edit1 - 0.1, T.edit1 + 0.1, t) * (1 - sstep(T.rewind0, T.rewind1, t));
+  const live = sstep(T.rewind0, T.rewind1, t);
+  glow.style.opacity = (0.52 + 0.25 * live).toFixed(3);
+  glow.style.transform = 'translate(' + (hot * 40).toFixed(1) + 'px,' + (-hot * 60 + live * -20).toFixed(1) + 'px) scale(' + (1 + live * 0.16).toFixed(3) + ')';
+  glow.style.background = 'radial-gradient(closest-side,rgba(94,234,212,' + (0.13 + 0.05 * live).toFixed(3) + '),rgba(255,107,107,' + (0.055 * hot).toFixed(3) + ' 55%,transparent 74%)';
+
+  // terminal — the block cursor opens into the window
+  const bp = linePoint(0, 0);
+  const termR = OM.morphRect(t, 0.24, 0.85,
+    {x: bp.x - 5, y: bp.y - 5, w: 24, h: 36, r: 3},
+    {x: 360, y: 470, w: 1200, h: 390, r: 18},
+    {curve: OM.ease.expoOut});
+  const termFade = 1 - sstep(T.gather0, T.gather0 + 0.55, t);
+  const termDim = 1 - 0.55 * sstep(4.05, 4.18, t) * (1 - sstep(5.62, 5.82, t));
+  $('term').style.opacity = (sstep(0.22, 0.27, t) * termFade * termDim).toFixed(3);
+  $('term').style.left = termR.x.toFixed(2) + 'px';
+  $('term').style.top = termR.y.toFixed(2) + 'px';
+  $('term').style.width = termR.w.toFixed(2) + 'px';
+  $('term').style.height = termR.h.toFixed(2) + 'px';
+  $('term').style.borderRadius = termR.r.toFixed(2) + 'px';
+  $('term').style.transform = 'none';
+
+  // typed lines
+  const m = OM.typeOn(t, T.typeMark, CMD_MARK, {cps: T.markCps});
+  L[0].tx.innerHTML = promptHTML(m.str);
+  L[0].el.style.opacity = sstep(T.typeMark - 0.05, T.typeMark + 0.08, t).toFixed(3);
+  L[1].el.style.opacity = sstep(T.markEnter + 0.08, T.markEnter + 0.22, t).toFixed(3);
+  const li = OM.typeOn(t, T.listType, CMD_LIST, {cps: T.listCps});
+  L[2].tx.innerHTML = promptHTML(li.str);
+  L[2].el.style.opacity = sstep(T.listType - 0.05, T.listType + 0.08, t).toFixed(3);
+  for (let i = 3; i <= 5; i++) {
+    L[i].el.style.opacity = sstep(T.listRows + (i - 3) * 0.08, T.listRows + 0.10 + (i - 3) * 0.08, t).toFixed(3);
+  }
+  const u = OM.typeOn(t, T.undoType, CMD_UNDO, {cps: T.undoCps});
+  L[6].tx.innerHTML = promptHTML(u.str);
+  L[6].el.style.opacity = sstep(T.undoType - 0.05, T.undoType + 0.08, t).toFixed(3);
+  L[7].el.style.opacity = sstep(T.undoEnter + 0.08, T.undoEnter + 0.22, t).toFixed(3);
+  L[8].el.style.opacity = sstep(T.undoEnter + 0.24, T.undoEnter + 0.38, t).toFixed(3);
+  const g = OM.typeOn(t, T.gitType, CMD_GIT, {cps: T.gitCps});
+  L[9].tx.innerHTML = promptHTML(g.str);
+  L[9].el.style.opacity = sstep(T.gitType - 0.05, T.gitType + 0.08, t).toFixed(3);
+  L[10].el.style.opacity = sstep(T.gitOut, T.gitOut + 0.14, t).toFixed(3);
+
+  const labels = sstep(T.cardsIn, T.cardsIn + 0.2, t) * (1 - sstep(T.gather0, T.gather0 + 0.4, t));
+  $('treeLab').style.opacity = labels.toFixed(3);
+  $('shadowLab').style.opacity = labels.toFixed(3);
+  $('shadowRule').style.opacity = labels.toFixed(3);
+
+  // cards
+  const cards = [c1, c2, c3], shadows = [s1, s2, s3];
+  const shadowBase = [{x: 300, y: 96}, {x: 770, y: 96}, {x: 1240, y: 96}];
+  for (let i = 0; i < 3; i++) {
+    const p = cardPop(t, T.cardsIn, i);
+    const gather = OM.gather(t, T.gather0, T.gather1, i, 3, shadowBase[i], {x: 770, y: 415}, {stagger: 0.06, arc: 70, spin: 0.25});
+    const gk = gather.k;
+    const rise = sstep(T.rewind0, T.rewind1, t);
+    let op = t >= T.cardsIn ? p.op : 0;
+    if (i === 2) op *= sstep(T.edit3, T.edit3 + 0.15, t) * (1 - sstep(T.rewind0 + 0.2, T.rewind0 + 0.7, t));
+    if (i < 2) op *= 1 - sstep(0.82, 0.99, rise);
+    op *= 1 - sstep(T.gather0, T.gather0 + 0.35, t);
+    cards[i].style.opacity = op.toFixed(3);
+    cards[i].style.transform = 'translateY(' + p.dy.toFixed(2) + 'px) scale(' + p.s.toFixed(4) + ')';
+
+    const sk = sstep(T.shadowIn, T.shadowIn + 0.25, t);
+    const sy = (30 * (1 - rise));
+    let sop = sk * (1 - sstep(T.gather1 - 0.1, T.gather1 + 0.15, t));
+    if (i === 2) sop *= sstep(T.edit3, T.edit3 + 0.2, t);
+    if (t > T.gather0) sop *= 1 - sstep(0.70, 0.97, gk);
+    shadows[i].style.opacity = sop.toFixed(3);
+    shadows[i].style.transform = 'translate(' + (gather.x - shadowBase[i].x).toFixed(2) + 'px,' + (gather.y - shadowBase[i].y + sy).toFixed(2) + 'px) rotate(' + gather.rot.toFixed(4) + 'rad) scale(' + ((1 + gk * 0.04) * (1 - 0.58 * gk)).toFixed(4) + ')';
+    shadows[i].style.zIndex = rise > 0.97 ? '4' : '1';
+    shadows[i].style.borderColor = rise > 0.97 ? 'var(--line)' : 'rgba(94,234,212,.40)';
+    if (i < 2) shadows[i].querySelector('.slab').textContent = rise > 0.6 ? 'restored' : 'snapshot';
+    else shadows[i].querySelector('.slab').textContent = rise > 0.6 ? 'deleted' : 'not in snapshot';
+  }
+
+  // the edits, in reverse
+  const e1 = sstep(T.edit1, T.edit1 + 0.08, t);
+  $('c1line2').className = e1 > 0.5 ? 'broken' : '';
+  $('c1line2').innerHTML = e1 > 0.5 ? '&lt;main&gt;<span class="r">broken</span>&lt;/main&gt;' : '&lt;main&gt;checkout&lt;/main&gt;';
+  $('c1line2').style.opacity = (1 - sstep(T.rewind0 + 0.4, T.rewind0 + 0.9, t)).toFixed(3);
+  const e2 = sstep(T.edit2, T.edit2 + 0.08, t) * (1 - sstep(T.rewind0 + 0.9, T.rewind0 + 1.5, t));
+  c2.querySelector('.stamp').style.opacity = e2.toFixed(3);
+  c2.querySelector('.code').style.opacity = (1 - 0.65 * e2).toFixed(3);
+  const e3 = sstep(T.edit3, T.edit3 + 0.18, t);
+  c3.querySelector('.stamp').style.opacity = (e3 * (1 - sstep(T.rewind0 + 0.2, T.rewind0 + 0.7, t))).toFixed(3);
+
+  // the agent's diff, in a burst of hard cuts
+  let burst = null, burstCut = 0;
+  if (t >= 4.15 && t < 4.65) { burst = {sign: '+', file: 'src/App.tsx', text: '&lt;main&gt;<span class="r">broken</span>&lt;/main&gt;'}; burstCut = 4.15; }
+  else if (t >= 4.65 && t < 5.15) { burst = {sign: '-', file: '.env', text: 'STRIPE_KEY=sk_live_51N...'}; burstCut = 4.65; }
+  else if (t >= 5.15 && t < 5.65) { burst = {sign: '+', file: 'src/new.ts', text: 'export const newThing = <span class="r">true</span>'}; burstCut = 5.15; }
+  $('burst').style.opacity = burst ? '1' : '0';
+  if (burst) {
+    $('burstSign').textContent = burst.sign;
+    $('burstFile').textContent = burst.file;
+    $('burstText').innerHTML = burst.text;
+    const bk = sstep(burstCut, burstCut + 0.22, t);
+    $('burstBody').style.transform = 'translateY(' + (-16 * (1 - bk)).toFixed(2) + 'px) scale(' + (1 + 0.035 * (1 - bk)).toFixed(4) + ')';
+  }
+
+  // the shadow lift
+  const lift = sstep(T.rewind0, T.rewind0 + 0.45, t) * (1 - sstep(T.rewind1 - 0.25, T.rewind1 + 0.2, t));
+  const spineOp = (0.35 + 0.6 * lift) * sstep(T.cardsIn, T.cardsIn + 0.2, t) * (1 - sstep(T.gather0, T.gather0 + 0.5, t));
+  $('spine').style.opacity = spineOp.toFixed(3);
+  $('spine').style.height = (110 + 60 * lift).toFixed(1) + 'px';
+
+  // test badge
+  const tb = sstep(T.testFail, T.testFail + 0.12, t) * (1 - sstep(14.2, 14.7, t));
+  test.style.opacity = tb.toFixed(3);
+  const pass = t >= T.testPass;
+  test.className = pass ? 'pass' : 'fail';
+  testMark.textContent = pass ? '✓' : '✕';
+
+  // the seal the shadow cards gather into — it closes into the point the caret leaves from
+  const seal = OM.seal(t, T.gather0 + 0.15, T.gather0 + 1.05, {r: 150, turns: 0.22});
+  const close = 1 - sstep(16.42, 16.80, t);
+  $('seal').style.opacity = (sstep(T.gather0 + 0.15, T.gather0 + 0.55, t) * close * 0.75).toFixed(3);
+  $('seal').style.width = (seal.r * 2 * close).toFixed(1) + 'px';
+  $('seal').style.height = (seal.r * 2 * close).toFixed(1) + 'px';
+  $('seal').style.transform = 'translate(-50%,-50%) rotate(' + (seal.rot + 0.45 * (t - T.gather0)).toFixed(4) + 'rad)';
+
+  // wordmark
+  const mi = sstep(T.markIn - 0.02, T.markIn + 0.05, t);
+  mark.style.opacity = mi.toFixed(3);
+  const n = clamp(Math.floor((t - T.markIn) * 9) + 1, 0, 5);
+  MARK_LETTERS.forEach((s, i) => {
+    const on = i < n;
+    const d = OM.letterDrop(t, T.markIn + i * 0.11, 0, {stagger: 0, zeta: 0.52, omega: 25, dist: 54, squash: 0.006});
+    s.style.opacity = on ? d.op.toFixed(3) : '0';
+    s.style.transform = 'translateY(' + d.y.toFixed(2) + 'px) scale(' + d.sx.toFixed(4) + ',' + d.sy.toFixed(4) + ')';
+  });
+  const uw = sstep(T.markIn + 0.45, T.tag, t);
+  underline.style.opacity = uw.toFixed(3);
+  underline.style.width = (520 * uw).toFixed(1) + 'px';
+  underline.style.transform = 'translate(' + (960 - 260) + 'px,' + 604 + 'px)';
+
+  const tg = OM.wordRise(t, T.tag, {zeta: 0.6, omega: 18, dist: 24, s0: 0.98, ds: 0.02});
+  tag.style.opacity = tg.op.toFixed(3);
+  tag.style.transform = 'translateX(-50%) translateY(' + tg.y.toFixed(2) + 'px)';
+  const ct = OM.wordRise(t, T.cta, {zeta: 0.6, omega: 18, dist: 18, s0: 0.98, ds: 0.02});
+  cta.style.opacity = ct.op.toFixed(3);
+  cta.style.transform = 'translateX(-50%) translateY(' + ct.y.toFixed(2) + 'px)';
+  const sb = OM.wordRise(t, T.sub, {zeta: 0.6, omega: 18, dist: 14, s0: 0.98, ds: 0.02});
+  sub.style.opacity = sb.op.toFixed(3);
+  sub.style.transform = 'translateX(-50%) translateY(' + sb.y.toFixed(2) + 'px)';
+
+  // the one block cursor
+  const b = cursorAt(t);
+  let pulse = 1;
+  for (const tt of [T.edit1, T.edit2, T.edit3, T.undoEnter, T.markIn]) pulse += 0.20 * OM.ring(t - tt, 12, 30);
+  block.style.transform = 'translate(' + b.x.toFixed(2) + 'px,' + b.y.toFixed(2) + 'px) scale(' + (b.s * pulse).toFixed(4) + ')';
+  const blink = (t > 0.5 && t < T.typeMark) || (t > T.listType && t < T.listEnter) || (t > T.undoType && t < T.undoEnter) || (t > T.gitType && t < T.gitOut);
+  block.style.opacity = (b.op * (blink && Math.floor(t * 2.6) % 2 === 0 ? 0.12 : 1)).toFixed(3);
+
+  $('hud').textContent = 't=' + t.toFixed(3);
+  return true;
+}
+
+// ─────────────────────────────── contract ───────────────────────────────
+window.__meta = {
+  dur: DUR, fps: FPS, w: 1920, h: 1080,
+  cuts: [T.cardsIn, 4.15, 5.35, T.listType, T.undoType, T.rewind0, 12.45, T.gather0, T.markIn],
+  inFrame: {block: [0.00, 22, 'whole'], mark: [T.markIn, 22, 'whole']}
+};
+window.__seek = async t => seek(t);
+window.__track = t => {
+  const out = {};
+  const add = (name, id) => {
+    const el = $(id);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const op = parseFloat(getComputedStyle(el).opacity) || 0;
+    if (op > 0.02 && r.width > 1 && r.height > 1) out[name] = {x: r.x, y: r.y, w: r.width, h: r.height, op};
+  };
+  add('block', 'block');
+  add('term', 'term');
+  if (t >= T.cardsIn && t < T.gather0 + 0.4) {
+    add('card1', 'c1'); add('card2', 'c2'); add('card3', 'c3');
+    add('shadow1', 's1'); add('shadow2', 's2'); add('shadow3', 's3');
+  }
+  if (t >= T.markIn) add('mark', 'mark');
+  return out;
+};
+window.__motion = (t0, t1) => {
+  const c0 = camAt(t0), c1 = camAt(t1), cm = camAt((t0 + t1) / 2);
+  let d = OM.screenTravel(c0, c1, cm);
+  const M0 = OM.view(c0), M1 = OM.view(c1);
+  const a = cursorAt(t0), b = cursorAt(t1);
+  const p0 = OM.project(M0, a.x, a.y), p1 = OM.project(M1, b.x, b.y);
+  d = Math.max(d, Math.hypot(p0[0] - p1[0], p0[1] - p1[1]));
+  return d;
+};
+
+const EV = [];
+const ev = (t, kind, pan, v) => EV.push({t, kind, pan, v});
+ev(0.25, 'bloom', 0, 1);
+for (let i = 0; i < 12; i++) ev(T.typeMark + i * 0.075, 'key', -0.1, 0.35 + 0.1 * (i % 3));
+ev(T.markEnter, 'click', 0.1, 0.8); ev(T.markEnter + 0.1, 'land', 0, 0.7);
+ev(T.cardsIn, 'air', 0, 0.5); ev(T.shadowIn, 'glass', 0, 0.4);
+ev(T.edit1, 'hit', -0.3, 0.7); ev(T.edit2, 'hit', 0.3, 0.8); ev(T.edit3, 'hit', 0.55, 0.9);
+ev(T.testFail, 'bad', 0.4, 0.6);
+for (let i = 0; i < 7; i++) ev(T.listType + i * 0.075, 'key', -0.1, 0.3 + 0.1 * (i % 3));
+ev(T.listRows, 'glass', 0, 0.35); ev(T.listRows + 0.16, 'glass', 0, 0.3);
+for (let i = 0; i < 6; i++) ev(T.undoType + i * 0.085, 'key', -0.1, 0.4 + 0.1 * (i % 3));
+ev(T.undoEnter, 'click', 0.1, 0.95); ev(T.undoEnter, 'sub', 0, 1.0);
+ev(T.rewind0, 'air', 0, 0.9); ev(T.rewind0 + 0.5, 'rise', 0, 0.7);
+ev(T.testPass, 'pass', 0.4, 0.8); ev(T.undoEnter + 0.24, 'glass', 0, 0.45);
+for (let i = 0; i < 8; i++) ev(T.gitType + i * 0.075, 'key', -0.1, 0.3 + 0.1 * (i % 3));
+ev(T.gitOut, 'glass', 0.3, 0.4);
+ev(T.gather0, 'air', 0, 0.7); ev(T.markIn, 'word', 0, 1.0);
+ev(T.tag, 'tag', 0, 0.5); ev(T.cta, 'cta', 0, 0.6); ev(T.sub, 'end', 0, 0.5);
+EV.sort((a, b) => a.t - b.t);
+window.__events = () => ({T: DUR, events: EV});
+
+window.__ready = Promise.all([document.fonts.ready, (window.LOOK && LOOK.ready) || Promise.resolve()]).then(() => {
+  const cs = getComputedStyle(document.documentElement);
+  MONO = cs.getPropertyValue('--mono').trim() || 'monospace';
+  TEXT = cs.getPropertyValue('--text').trim() || 'sans-serif';
+  DISPLAY = cs.getPropertyValue('--display').trim() || 'sans-serif';
+  const cv = document.createElement('canvas'); mctx = cv.getContext('2d');
+
+  // measure the wordmark once, in the final face
+  let total = 0;
+  for (let i = 0; i < MARK_LETTERS.length; i++) {
+    const w = mw(MARK_LETTERS[i].textContent, 190);
+    MARK_X[i] = total; MARK_W[i] = w; total += w - 16;
+  }
+
+  // fixed grain
+  const g = document.createElement('canvas'); g.width = g.height = 256;
+  const gx = g.getContext('2d'), id = gx.createImageData(256, 256), r = OM.rng(7);
+  for (let i = 0; i < id.data.length; i += 4) {
+    const v = r() < 0.5 ? 0 : 255;
+    id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 15;
+  }
+  gx.putImageData(id, 0, 0);
+  $('grain').style.backgroundImage = 'url(' + g.toDataURL() + ')';
+
+  return seek(0);
+});
+
+const q = new URLSearchParams(location.search);
+if (q.has('t')) window.__ready.then(() => seek(parseFloat(q.get('t'))));
+if (q.has('hud')) $('hud').style.display = 'block';
+if (q.has('play')) window.__ready.then(() => { const t0 = performance.now(); (function loop() { seek(((performance.now() - t0) / 1000) % DUR); requestAnimationFrame(loop); })(); });
+})();
+</script>
+</body>
+</html>

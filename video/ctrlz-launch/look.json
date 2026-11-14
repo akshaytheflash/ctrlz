@@ -1,0 +1,20 @@
+{
+  "name": "ctrlz-phosphor",
+  "from": "ctrlz terminal palette - the product's own output",
+  "mood": "near-black terminal, phosphor teal, one red failure - a shadow tree under the real one",
+  "color": {
+    "ground": "#0C111A",
+    "deep": "#06080C",
+    "card": "#182130",
+    "line": "#334155",
+    "mute": "#93A1B8",
+    "ink": "#F4F8FF",
+    "accent": "#5EEAD4",
+    "accent2": "#FF7A7A"
+  },
+  "type": {
+    "display": { "face": "Geist", "weight": 600, "tracking": -0.035 },
+    "text": { "face": "Inter", "weight": 450, "tracking": -0.012 },
+    "mono": { "face": "Geist Mono", "weight": 400, "tracking": 0.01 }
+  }
+}
