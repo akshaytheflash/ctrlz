@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.locale.1.6.0.schema.json
+
+PackageIdentifier: akshaytheflash.ctrlz
+PackageVersion: "{{VERSION}}"
+PackageLocale: en-US
+Publisher: akshaytheflash
+PublisherUrl: https://github.com/akshaytheflash
+PublisherSupportUrl: https://github.com/akshaytheflash/ctrlz/issues
+PackageName: ctrlz
+PackageUrl: https://github.com/akshaytheflash/ctrlz
+License: MIT
+LicenseUrl: https://github.com/akshaytheflash/ctrlz/blob/main/LICENSE
+Copyright: Copyright (c) akshaytheflash
+ShortDescription: Undo coding-agent edits by restoring your working tree to an earlier snapshot
+Description: ctrlz is a local shadow store for your working tree. It snapshots a repository before each agent turn and `ctrlz undo` puts the tree back exactly as it was, including tracked files, untracked files and ignored-but-real files that git does not cover. There is no daemon, no network and no account.
+Moniker: ctrlz
+Tags:
+  - agent
+  - undo
+  - snapshot
+  - filesystem
+  - cli
+ManifestType: locale
+ManifestVersion: 1.6.0

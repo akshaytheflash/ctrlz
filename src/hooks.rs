@@ -92,6 +92,21 @@ where
             root.display()
         ));
     }
+
+    // Best effort: if the guard store does not exist this is a no-op, so the
+    // hook keeps working exactly as before for people who never opt in.
+    record_activity(agent, &session, &root, &label);
+}
+
+fn record_activity(agent: &str, session: &str, root: &std::path::Path, label: &str) {
+    let Ok(store) = crate::global::GlobalStore::open() else {
+        return;
+    };
+    if label == "stop" {
+        let _ = store.clear_activity();
+    } else {
+        let _ = store.record_activity(agent, session, &root.to_string_lossy());
+    }
 }
 
 fn log_error(message: &str) {

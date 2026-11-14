@@ -7,12 +7,14 @@ use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
 use crate::diff::{detect_renames, diff_manifests, unified, Kind};
+use crate::flags::{self, Severity};
+use crate::global::GlobalStore;
 use crate::manifest::manifest_of;
 use crate::prune::{prune as prune_turns, summary as prune_summary};
 use crate::restore::{apply_plan, plan_restore};
 use crate::snapshot::{mark_at, MarkOptions, DEFAULT_MAX_FILE};
 use crate::store::{read_blob, Store};
-use crate::util::{format_ago, format_timestamp, human_size, parse_duration, parse_size};
+use crate::util::{format_ago, format_timestamp, human_size, now_ms, parse_duration, parse_size};
 
 #[derive(Parser)]
 #[command(
@@ -81,6 +83,90 @@ enum Command {
     },
     /// Check the store, the hooks, write permissions, and clock skew
     Doctor,
+    /// Guard directories against destructive agent edits
+    Guard {
+        #[command(subcommand)]
+        command: GuardCommand,
+    },
+    /// List or inspect changes flagged by the guard
+    Flags {
+        /// Show one flag by id
+        id: Option<i64>,
+        #[arg(long, default_value = "24h", value_parser = parse_duration)]
+        since: Duration,
+        #[arg(long, default_value = "info")]
+        min_severity: String,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore files the guard captured
+    Recover {
+        /// Restore one flag by id (default: the most recent deletion)
+        id: Option<i64>,
+        /// Restore every captured deletion in a window, e.g. 1h
+        #[arg(long, value_parser = parse_duration, conflicts_with = "id")]
+        since: Option<Duration>,
+        #[arg(long, default_value = "warn")]
+        min_severity: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Delete old flags and reclaim unreferenced blobs
+    Forget {
+        #[arg(long, default_value = "30d", value_parser = parse_duration)]
+        keep: Duration,
+    },
+}
+
+#[derive(Subcommand)]
+enum GuardCommand {
+    /// Create the guard store and register roots (starts nothing)
+    Init {
+        /// A directory to guard. Repeat for several roots.
+        #[arg(long, required = true)]
+        root: Vec<String>,
+        /// Extra exclusion glob, e.g. "*.log"
+        #[arg(long)]
+        exclude: Vec<String>,
+        /// Extra protection glob, e.g. "*.sql"
+        #[arg(long)]
+        protect: Vec<String>,
+        #[arg(long, value_parser = parse_size)]
+        max_file: Option<u64>,
+    },
+    /// Capture a baseline of every in-scope file
+    Scan,
+    /// Compare the roots against the baseline and raise flags
+    Check {
+        /// Check only these paths (what the watcher does per event)
+        #[arg(long)]
+        path: Vec<String>,
+    },
+    /// Watch the roots in the foreground
+    Watch {
+        #[arg(long, default_value = "2s", value_parser = parse_duration)]
+        idle: Duration,
+        /// Stop after this many change batches (used by tests)
+        #[arg(long)]
+        exit_after: Option<usize>,
+    },
+    /// Start the watcher in the background
+    Start,
+    /// Stop the background watcher
+    Stop,
+    /// Report what the guard is doing
+    Status,
+    /// Mark an agent as active so changes can be attributed
+    Activity {
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -126,7 +212,89 @@ pub fn run() -> Result<()> {
         }
         Command::Watch { idle, max_file } => crate::watch::watch(idle, max_file),
         Command::Doctor => doctor(),
+        Command::Guard { command } => match command {
+            GuardCommand::Init {
+                root,
+                exclude,
+                protect,
+                max_file,
+            } => crate::guard::init(&root, &exclude, &protect, max_file),
+            GuardCommand::Scan => crate::guard::scan(),
+            GuardCommand::Check { path } => {
+                if path.is_empty() {
+                    crate::guard::check()
+                } else {
+                    crate::guard::check_explicit(&path)
+                }
+            }
+            GuardCommand::Watch { idle, exit_after } => crate::guard::watch(idle, exit_after),
+            GuardCommand::Start => crate::guard::start(),
+            GuardCommand::Stop => crate::guard::stop(),
+            GuardCommand::Status => crate::guard::status(),
+            GuardCommand::Activity {
+                agent,
+                session,
+                clear,
+            } => crate::guard::activity(agent.as_deref(), session.as_deref(), clear),
+        },
+        Command::Flags {
+            id,
+            since,
+            min_severity,
+            limit,
+            json,
+        } => flags_command(id, since, &min_severity, limit, json),
+        Command::Recover {
+            id,
+            since,
+            min_severity,
+            dry_run,
+        } => {
+            let min = Severity::parse(&min_severity)
+                .ok_or_else(|| anyhow!("unknown severity: {min_severity}"))?;
+            match since {
+                Some(window) => crate::recover::restore_window(window, min, dry_run),
+                None => crate::recover::undo(id, dry_run),
+            }
+        }
+        Command::Forget { keep } => crate::recover::forget(keep),
     }
+}
+
+fn flags_command(
+    id: Option<i64>,
+    since: Duration,
+    min_severity: &str,
+    limit: usize,
+    json: bool,
+) -> Result<()> {
+    let min =
+        Severity::parse(min_severity).ok_or_else(|| anyhow!("unknown severity: {min_severity}"))?;
+    let store = GlobalStore::open()?;
+
+    if let Some(id) = id {
+        let flag = store
+            .flag(id)?
+            .ok_or_else(|| anyhow!("flag {id} not found"))?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&flags::flag_to_json(&flag))?
+            );
+        } else {
+            print!("{}", flags::describe(&flag));
+        }
+        return Ok(());
+    }
+
+    let cutoff = now_ms() - since.as_millis().min(i64::MAX as u128) as i64;
+    let list = store.flags_since(cutoff, min.rank(), limit)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&flags::to_json(&list))?);
+    } else {
+        print!("{}", flags::render(&list));
+    }
+    Ok(())
 }
 
 fn init(claude: bool) -> Result<()> {

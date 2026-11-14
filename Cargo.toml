@@ -23,6 +23,11 @@ zstd = "0.14"
 assert_cmd = "2"
 tempfile = "3"
 
+# `guard start` must not leak the parent's stdout/stderr pipe into the
+# detached watcher, or a piped caller waits for EOF forever.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: akshaytheflash.ctrlz
+PackageVersion: "{{VERSION}}"
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: ctrlz.exe
+    PortableCommandAlias: ctrlz
+Installers:
+  - Architecture: x64
+    InstallerUrl: "{{URL}}"
+    InstallerSha256: "{{CHECKSUM}}"
+ManifestType: installer
+ManifestVersion: 1.6.0

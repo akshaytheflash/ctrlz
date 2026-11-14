@@ -1,0 +1,39 @@
+{
+  "name": "@akshaytheflash/ctrlz",
+  "version": "{{VERSION}}",
+  "description": "Undo what a coding agent did to your working tree",
+  "keywords": [
+    "agent",
+    "undo",
+    "snapshot",
+    "filesystem",
+    "git",
+    "cli"
+  ],
+  "homepage": "https://github.com/akshaytheflash/ctrlz#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akshaytheflash/ctrlz.git"
+  },
+  "bugs": {
+    "url": "https://github.com/akshaytheflash/ctrlz/issues"
+  },
+  "license": "MIT",
+  "author": "akshaytheflash",
+  "bin": {
+    "ctrlz": "bin/ctrlz.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@akshaytheflash/ctrlz-win32-x64": "{{VERSION}}",
+    "@akshaytheflash/ctrlz-darwin-x64": "{{VERSION}}",
+    "@akshaytheflash/ctrlz-darwin-arm64": "{{VERSION}}",
+    "@akshaytheflash/ctrlz-linux-x64": "{{VERSION}}"
+  }
+}

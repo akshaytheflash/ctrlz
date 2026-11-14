@@ -1,0 +1,384 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (for example v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: ctrlz-x86_64-pc-windows-msvc.zip
+            binary: ctrlz.exe
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: ctrlz-x86_64-apple-darwin.tar.gz
+            binary: ctrlz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: ctrlz-aarch64-apple-darwin.tar.gz
+            binary: ctrlz
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: ctrlz-x86_64-unknown-linux-gnu.tar.gz
+            binary: ctrlz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package archive (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "${{ matrix.archive }}" -C "target/${{ matrix.target }}/release" "${{ matrix.binary }}"
+          ls -l "${{ matrix.archive }}"
+
+      - name: Package archive (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Compress-Archive `
+            -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}" `
+            -DestinationPath "${{ matrix.archive }}" `
+            -Force
+          Get-Item "${{ matrix.archive }}" | Format-List Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${TAG}"
+          if [ -z "${tag}" ]; then
+            echo "no tag was provided" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version matches Cargo.toml
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "${manifest_version}" != "${VERSION}" ]; then
+            echo "tag says ${VERSION} but Cargo.toml says ${manifest_version}" >&2
+            exit 1
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum ctrlz-*.zip ctrlz-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ctrlz ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          body: |
+            Prebuilt `ctrlz` binaries for `${{ steps.version.outputs.version }}`.
+
+            | platform | archive |
+            | --- | --- |
+            | Windows x64 | `ctrlz-x86_64-pc-windows-msvc.zip` |
+            | macOS Intel | `ctrlz-x86_64-apple-darwin.tar.gz` |
+            | macOS Apple silicon | `ctrlz-aarch64-apple-darwin.tar.gz` |
+            | Linux x64 (glibc) | `ctrlz-x86_64-unknown-linux-gnu.tar.gz` |
+
+            Every archive is listed in `SHA256SUMS` as `<sha256>  <filename>`.
+            Verify a download with `sha256sum -c SHA256SUMS` (or
+            `shasum -a 256 -c SHA256SUMS` on macOS).
+
+            Other channels: `npm install -g @akshaytheflash/ctrlz`,
+            `brew install akshaytheflash/ctrlz/ctrlz`, `scoop install ctrlz`,
+            `choco install ctrlz`, `winget install akshaytheflash.ctrlz`.
+          files: |
+            dist/ctrlz-*.zip
+            dist/ctrlz-*.tar.gz
+            dist/SHA256SUMS
+
+  crates:
+    name: crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      # A job level `if` cannot read the `secrets` context, so the gate lives
+      # here: the job is green and does nothing when the secret is absent.
+      - name: Check for CARGO_REGISTRY_TOKEN
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
+            echo "CARGO_REGISTRY_TOKEN is not set; skipping crates.io publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Install Rust
+        if: steps.gate.outputs.publish == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo publish
+        if: steps.gate.outputs.publish == 'true'
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  npm:
+    name: npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Check for NPM_TOKEN
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "NPM_TOKEN is not set; skipping npm publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Setup node
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Download artifacts
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Assemble platform packages
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for slug in win32-x64 darwin-x64 darwin-arm64 linux-x64; do
+            mkdir -p "packaging/npm/platforms/${slug}/bin"
+          done
+
+          unzip -o dist/ctrlz-x86_64-pc-windows-msvc.zip \
+            -d packaging/npm/platforms/win32-x64/bin
+          tar -xzf dist/ctrlz-x86_64-apple-darwin.tar.gz \
+            -C packaging/npm/platforms/darwin-x64/bin
+          tar -xzf dist/ctrlz-aarch64-apple-darwin.tar.gz \
+            -C packaging/npm/platforms/darwin-arm64/bin
+          tar -xzf dist/ctrlz-x86_64-unknown-linux-gnu.tar.gz \
+            -C packaging/npm/platforms/linux-x64/bin
+
+          rm -f packaging/npm/platforms/*/bin/.gitkeep
+          chmod +x packaging/npm/platforms/darwin-x64/bin/ctrlz
+          chmod +x packaging/npm/platforms/darwin-arm64/bin/ctrlz
+          chmod +x packaging/npm/platforms/linux-x64/bin/ctrlz
+
+          ls -lR packaging/npm/platforms
+
+      - name: Substitute version
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for manifest in packaging/npm/package.json packaging/npm/platforms/*/package.json; do
+            sed -i "s/{{VERSION}}/${VERSION}/g" "${manifest}"
+          done
+          node -e '
+            const files = process.argv.slice(1);
+            for (const file of files) {
+              const manifest = require("./" + file);
+              if (manifest.version !== process.env.VERSION) {
+                throw new Error(`${file}: version ${manifest.version} != ${process.env.VERSION}`);
+              }
+            }
+          ' packaging/npm/package.json packaging/npm/platforms/win32-x64/package.json packaging/npm/platforms/darwin-x64/package.json packaging/npm/platforms/darwin-arm64/package.json packaging/npm/platforms/linux-x64/package.json
+
+      - name: Publish platform packages
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for slug in win32-x64 darwin-x64 darwin-arm64 linux-x64; do
+            echo "publishing @akshaytheflash/ctrlz-${slug}@${VERSION}"
+            npm publish "packaging/npm/platforms/${slug}" --access public
+          done
+
+      - name: Publish wrapper package
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish packaging/npm --access public
+
+  chocolatey:
+    name: Chocolatey
+    needs: release
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Check for CHOCO_API_KEY
+        id: gate
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CHOCO_API_KEY)) {
+            Write-Host "CHOCO_API_KEY is not set; skipping Chocolatey publish."
+            "publish=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            "publish=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      - name: Checkout
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Download Windows archive
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ctrlz-x86_64-pc-windows-msvc.zip
+          path: dist
+
+      - name: Pack and push
+        if: steps.gate.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $zip = Join-Path "dist" "ctrlz-x86_64-pc-windows-msvc.zip"
+          if (-not (Test-Path $zip)) {
+            throw "missing $zip"
+          }
+
+          $checksum = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
+          $url = "https://github.com/akshaytheflash/ctrlz/releases/download/v$env:VERSION/ctrlz-x86_64-pc-windows-msvc.zip"
+          Write-Host "sha256=$checksum"
+          Write-Host "url=$url"
+
+          $nuspec = "packaging/chocolatey/ctrlz.nuspec"
+          $install = "packaging/chocolatey/tools/chocolateyinstall.ps1"
+
+          $nuspecText = (Get-Content $nuspec -Raw).Replace("{{VERSION}}", $env:VERSION)
+          $nuspecText = $nuspecText.Replace("{{URL}}", $url).Replace("{{CHECKSUM}}", $checksum)
+          Set-Content -Path $nuspec -Value $nuspecText -NoNewline -Encoding utf8NoBOM
+
+          $installText = (Get-Content $install -Raw).Replace("{{VERSION}}", $env:VERSION)
+          $installText = $installText.Replace("{{URL}}", $url).Replace("{{CHECKSUM}}", $checksum)
+          Set-Content -Path $install -Value $installText -NoNewline -Encoding utf8NoBOM
+
+          choco pack $nuspec --output-directory dist
+          if ($LASTEXITCODE -ne 0) {
+            throw "choco pack failed"
+          }
+
+          $nupkg = Join-Path "dist" "ctrlz.$env:VERSION.nupkg"
+          choco push $nupkg --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+          if ($LASTEXITCODE -ne 0) {
+            throw "choco push failed"
+          }

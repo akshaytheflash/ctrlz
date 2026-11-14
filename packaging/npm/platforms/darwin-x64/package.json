@@ -1,0 +1,16 @@
+{
+  "name": "@akshaytheflash/ctrlz-darwin-x64",
+  "version": "{{VERSION}}",
+  "description": "Prebuilt ctrlz binary for macOS x64",
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/"
+  ],
+  "main": "package.json"
+}
