@@ -21,6 +21,9 @@ jobs:
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # A retired or starved runner should fail the release, not hang it for six
+    # hours. macos-13 sat queued with no runner until this was added.
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -32,7 +35,7 @@ jobs:
             archive: ctrlz-x86_64-pc-windows-msvc.zip
             binary: ctrlz.exe
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             archive: ctrlz-x86_64-apple-darwin.tar.gz
             binary: ctrlz
           - target: aarch64-apple-darwin
