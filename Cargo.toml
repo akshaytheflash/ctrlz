@@ -1,10 +1,19 @@
 [package]
 name = "ctrlz"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 description = "A local shadow store for undoing coding-agent edits"
 license = "MIT"
+repository = "https://github.com/akshaytheflash/ctrlz"
+homepage = "https://github.com/akshaytheflash/ctrlz"
+readme = "README.md"
+keywords = ["agent", "undo", "snapshot", "filesystem", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+# The repository carries launch-video frames and packaging manifests that do
+# not belong in the crate source. Without this list the tarball is ~34 MB and
+# crates.io rejects it.
+include = ["/src", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
 
 [dependencies]
 anyhow = "1"
