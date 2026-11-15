@@ -1,10 +1,15 @@
 mod cli;
 mod diff;
 mod doctor;
+mod flags;
+mod glob;
+mod global;
+mod guard;
 mod hooks;
 mod ignore;
 mod manifest;
 mod prune;
+mod recover;
 mod restore;
 mod snapshot;
 mod store;

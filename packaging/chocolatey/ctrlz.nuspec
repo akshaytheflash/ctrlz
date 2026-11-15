@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>ctrlz</id>
+    <version>{{VERSION}}</version>
+    <title>ctrlz</title>
+    <authors>akshaytheflash</authors>
+    <owners>akshaytheflash</owners>
+    <projectUrl>https://github.com/akshaytheflash/ctrlz</projectUrl>
+    <packageSourceUrl>https://github.com/akshaytheflash/ctrlz</packageSourceUrl>
+    <projectSourceUrl>https://github.com/akshaytheflash/ctrlz</projectSourceUrl>
+    <docsUrl>https://github.com/akshaytheflash/ctrlz#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/akshaytheflash/ctrlz/issues</bugTrackerUrl>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <copyright>Copyright (c) akshaytheflash</copyright>
+    <summary>Undo what a coding agent did to your working tree</summary>
+    <description><![CDATA[
+ctrlz is a local shadow store for your working tree. It snapshots a repository
+before each agent turn and `ctrlz undo` puts the tree back exactly as it was:
+tracked files, untracked files, ignored-but-real files, everything git does not
+cover.
+
+`ctrlz guard` also watches directories you name and keeps a shadow index of
+them, so a deletion outside a repository, or between two turns, is recoverable
+too.
+
+There is no network and no account. The per-project store needs no daemon; the
+optional guard runs one only when you start it.
+
+Commands: `ctrlz init`, `ctrlz mark`, `ctrlz list`, `ctrlz show`, `ctrlz diff`,
+`ctrlz undo`, `ctrlz back`, `ctrlz prune`, `ctrlz watch`, `ctrlz doctor`,
+`ctrlz guard`, `ctrlz flags`, `ctrlz recover`.
+
+This package installs the prebuilt Windows x64 executable; it does not require
+elevation or run any interactive prompt.
+]]></description>
+    <tags>ctrlz agent undo snapshot filesystem</tags>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

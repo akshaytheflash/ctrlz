@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
+  "version": "{{VERSION}}",
+  "description": "Undo what a coding agent did to your working tree",
+  "homepage": "https://github.com/akshaytheflash/ctrlz",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/akshaytheflash/ctrlz/releases/download/v{{VERSION}}/ctrlz-x86_64-pc-windows-msvc.zip#/dl.zip",
+      "hash": "{{CHECKSUM}}"
+    }
+  },
+  "bin": [
+    "ctrlz.exe"
+  ],
+  "checkver": {
+    "github": "https://github.com/akshaytheflash/ctrlz"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/akshaytheflash/ctrlz/releases/download/v$version/ctrlz-x86_64-pc-windows-msvc.zip#/dl.zip"
+      }
+    },
+    "hash": {
+      "url": "https://github.com/akshaytheflash/ctrlz/releases/download/v$version/SHA256SUMS"
+    }
+  }
+}

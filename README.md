@@ -15,8 +15,9 @@ cargo build --release
 cargo install --path .
 ```
 
-There is no daemon, no network, no account. The store is a directory of zstd
-blobs and a SQLite index outside the repository.
+There is no network and no account. The per-project store is a directory of zstd
+blobs and a SQLite index outside the repository, and it needs no daemon. The
+optional global guard runs one only when you start it.
 
 ## Store location
 
@@ -60,6 +61,14 @@ ctrlz watch [--idle 3s]        snapshot after change bursts, no hooks needed
 ctrlz doctor                   check the store, hooks, write access, clock skew
 ctrlz hook claude              Claude Code hook entry point (stdin JSON)
 ctrlz hook opencode            opencode hook entry point (stdin JSON)
+ctrlz guard init --root <p>    register directories to guard (starts nothing)
+ctrlz guard scan               capture the baseline that makes recovery possible
+ctrlz guard check              compare against the baseline and raise flags
+ctrlz guard watch|start|stop   run the watcher, foreground or detached
+ctrlz guard status             roots, shadowed files, flags, disk use
+ctrlz flags [--json]           list or inspect flagged changes
+ctrlz recover [--since 1h]     restore captured files
+ctrlz forget --keep 30d        drop old flags and reclaim unreferenced blobs
 ```
 
 `mark` is built for a prompt hook: it stats the tree, hashes only files whose
@@ -71,6 +80,44 @@ skipped and shown by `ctrlz show`; they are never deleted by a restore.
 `undo` takes a `pre-restore` snapshot first, so the undo itself is undoable.
 Running `undo` again restores the pre-restore snapshot. `back <n>` always
 restores exactly turn `n` and is idempotent.
+
+## Global guard
+
+`ctrlz guard` watches directories you name and keeps a shadow index of every
+file in them, so a deletion is recoverable even when it happens outside a
+repository or between agent turns.
+
+```sh
+ctrlz guard init --root ~/code --root ~/notes
+ctrlz guard scan          # capture the baseline
+ctrlz guard watch         # foreground; or `ctrlz guard start` to detach
+ctrlz guard status
+```
+
+The baseline is the whole point. A filesystem watcher learns that a path
+vanished, not what was in it, so `scan` puts the bytes in the store first and
+the watcher keeps them current on every write. A file that was never captured is
+reported as `critical` with `recoverable: false` instead of being silently
+ignored.
+
+```sh
+ctrlz flags                 # what changed, newest first
+ctrlz flags 12              # one flag in detail
+ctrlz recover               # restore the most recent deletion
+ctrlz recover 12            # restore one flag
+ctrlz recover --since 1h    # restore every deletion in the window
+```
+
+Deletions are always recorded. Ordinary edits are recorded only while an agent
+marker is active, which the Claude Code and opencode hooks write automatically.
+For any other agent, call `ctrlz guard activity --agent <name> --session <id>`
+at the start of a turn and `ctrlz guard activity --clear` at the end. Deleting
+or changing a protected file (`.env`, `*.pem`, `id_*`, `.ssh/**`) is `critical`.
+
+The guard never starts on login. There is no launchd plist, no systemd unit, and
+no scheduled task: `ctrlz guard start` runs a detached process and
+`ctrlz guard stop` ends it. See [docs/guard.md](docs/guard.md) for the rule
+table and the threat model.
 
 ## Hooks
 

@@ -1,0 +1,16 @@
+{
+  "name": "@akshaytheflash/ctrlz-linux-x64",
+  "version": "{{VERSION}}",
+  "description": "Prebuilt ctrlz binary for Linux x64 (glibc)",
+  "license": "MIT",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/"
+  ],
+  "main": "package.json"
+}
