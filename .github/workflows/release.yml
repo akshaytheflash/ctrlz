@@ -302,8 +302,12 @@ jobs:
         run: |
           set -euo pipefail
           for slug in win32-x64 darwin-x64 darwin-arm64 linux-x64; do
+            if npm view "@akshaytheflash/ctrlz-${slug}@${VERSION}" version >/dev/null 2>&1; then
+              echo "already published: @akshaytheflash/ctrlz-${slug}@${VERSION}"
+              continue
+            fi
             echo "publishing @akshaytheflash/ctrlz-${slug}@${VERSION}"
-            npm publish "packaging/npm/platforms/${slug}" --access public
+            npm publish "./packaging/npm/platforms/${slug}" --access public
           done
 
       - name: Publish wrapper package
@@ -311,7 +315,16 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish packaging/npm --access public
+        # A bare "packaging/npm" is parsed as the GitHub shorthand
+        # github:packaging/npm, so npm tries to clone a repository instead of
+        # publishing the folder. The leading ./ makes it a path.
+        run: |
+          set -euo pipefail
+          if npm view "@akshaytheflash/ctrlz@${VERSION}" version >/dev/null 2>&1; then
+            echo "already published: @akshaytheflash/ctrlz@${VERSION}"
+            exit 0
+          fi
+          npm publish ./packaging/npm --access public
 
   chocolatey:
     name: Chocolatey
