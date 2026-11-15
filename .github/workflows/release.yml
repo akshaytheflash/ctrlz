@@ -163,9 +163,8 @@ jobs:
             Verify a download with `sha256sum -c SHA256SUMS` (or
             `shasum -a 256 -c SHA256SUMS` on macOS).
 
-            Other channels: `npm install -g @akshaytheflash/ctrlz`,
-            `brew install akshaytheflash/ctrlz/ctrlz`, `scoop install ctrlz`,
-            `choco install ctrlz`, `winget install akshaytheflash.ctrlz`.
+            Chocolatey: `choco install ctrlz` (submitted for moderation).
+            npm and crates.io are wired up but not published yet.
           files: |
             dist/ctrlz-*.zip
             dist/ctrlz-*.tar.gz
